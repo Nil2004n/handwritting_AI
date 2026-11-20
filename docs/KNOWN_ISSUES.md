@@ -13,11 +13,22 @@
    `npm install` inside the project.
 
 ## Still open
-4. **No emulator / device testing.** Host is a VM without nested
-   virtualization (no vmx/svm, no /dev/kvm); a hardware-accelerated AVD is
-   impossible from this container and an unaccelerated x86_64 image would be
-   unusably slow. Alternative: install the debug APK on a physical device
-   (`adb install`) or a KVM-capable host. APK build success stands on its own.
+4. **No emulator / device testing — verified impossible on this host
+   (2026-11-20).** Guest VM without nested virtualization (no vmx/svm,
+   no /dev/kvm, `emulator -accel-check`: "KVM requires a CPU that supports
+   vmx or svm"). Installed `emulator` 37.3.10.0 +
+   `system-images;android-36;default;x86_64` and created AVD
+   `notebookocr-test` (Pixel, x86_64, swiftshader, 1536 MB) to attempt a
+   bounded headless boot. Two hard refusals, both exit=1, no device:
+   `-accel off` → "Software CPU emulation is not supported… (or set
+   ANDROID_I_WANT_MY_TCG=yes)"; with `ANDROID_I_WANT_MY_TCG=yes` →
+   "x86_64 emulation currently requires hardware acceleration!" Full logs:
+   `/tmp/opencode/emulator.log`, `/tmp/opencode/emulator-tcg.log`
+   (outside repo). ARM-ABI emulation on this x86_64 host was not attempted
+   (forbidden: unusably slow, proves nothing about the x86_64 APK). AVD
+   definition kept at `~/.android/avd/notebookocr-test.*` for reuse on a
+   KVM-capable host. Alternative: `adb install` the debug APK on a physical
+   device. APK build success stands on its own.
 5. Test renderer counts: the RN jest preset duplicates `testID` on composite
    + host nodes; UI tests query composite nodes via
    `src/testUtils/queries.ts`. Revisit if the preset changes its mocks.

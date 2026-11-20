@@ -27,7 +27,13 @@
   - Correct nesting: `cmdline-tools/latest/{bin,lib,…}` (not double-nested)
   - SDK licenses accepted via `sdkmanager --licenses` (owner-approved)
 - NOT installed: NDK/CMake (build did not require them), full Android
-  Studio (unnecessary headless), emulator packages (infeasible — see below)
+  Studio (unnecessary headless)
+- Emulator packages (installed 2026-11-20 for a boot attempt, unusable here):
+  `emulator` 37.3.10.0, `system-images;android-36;default;x86_64` rev 2;
+  AVD `notebookocr-test` defined at `~/.android/avd/` (Pixel, x86_64,
+  swiftshader_indirect, 1536 MB). `avdmanager create avd` fails on current
+  tooling (missing `devices.xml` in image dir) — AVD was written manually
+  and lists fine under `emulator -list-avds`. Reusable on a KVM host.
 
 ## Activation (per shell)
 ```sh

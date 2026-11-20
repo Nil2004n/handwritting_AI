@@ -1,48 +1,60 @@
-# Handoff (toolchain provisioned 2026-11-20 — real debug APK built)
+# Handoff (emulator attempt 2026-11-20 — host-blocked, no on-device run)
 
 ## Completed this session
-- Audited host (Kali x86_64 VM, 5 CPU, ~9 GB RAM) and project requirements
-  (AGP 9.2.1, Gradle 9.4.1, Kotlin 2.2.0, compileSdk 37, buildTools 37.0.0).
-- Reused existing full JDK 21 for the Gradle daemon (user-scoped
-  `~/.gradle/gradle.properties`); system Java still 25; no global change.
-- Installed user-scoped Android SDK (`~/Android/Sdk`, checksum-verified
-  cmdline-tools 22.0 + platform-tools + android-37.2 + build-tools 37.0.0;
-  licenses accepted with owner approval; no sudo).
-- `android/local.properties` created (git-ignored); `env/android.sh`
-  activation helper added (idempotent).
-- Full check suite green: tsc, eslint, `jest --runInBand` 38/38.
-- `./gradlew assembleDebug` → BUILD SUCCESSFUL; APK verified via aapt +
-  SHA-256 (see TEST_MATRIX.md). Emulator ruled out (no nested virt).
+- Re-read all Phase 0/toolchain docs; verified git clean at 19a4ff8,
+  JDK 21 daemon, SDK present, APK current (rebuild: BUILD SUCCESSFUL in 4s,
+  up-to-date, same 125,320,135-byte artifact).
+- Installed `emulator` 37.3.10.0 + `system-images;android-36;default;x86_64`
+  (stable, host-arch, ABI-compatible with the APK's x86_64 slice).
+- Created AVD `notebookocr-test` manually (avdmanager hits a `devices.xml`
+  tooling quirk); `emulator -list-avds` confirms it.
+- Attempted ONE bounded headless boot with logging. Refused twice, exit 1:
+  `-accel off` → software CPU emulation unsupported; with
+  `ANDROID_I_WANT_MY_TCG=yes` → "x86_64 emulation currently requires
+  hardware acceleration!" No adb devices ever appeared. No ARM emulation
+  attempted (explicitly out of scope). No repeated AVD creation.
+- No PaddleOCR work started. No native code touched. No AVD wiped
+  (it is newly created, unused).
 
 ## Files changed
-- New: `env/android.sh`, `docs/ENVIRONMENT_SETUP.md`
-- Updated: `docs/KNOWN_ISSUES.md`, `docs/TEST_MATRIX.md`, this HANDOFF
-- Machine-local / ignored (never committed): `~/Android/Sdk`,
-  `~/.gradle/gradle.properties`, `android/local.properties`, `android/app/build/`
-- No RN/Gradle/Kotlin versions changed; no generated native code edited.
+- Updated: `docs/KNOWN_ISSUES.md` (issue #4 with hard evidence + log paths),
+  `docs/TEST_MATRIX.md` (attempt record, 11 checks marked UNVERIFIED,
+  debug-vs-standalone note), `docs/ENVIRONMENT_SETUP.md` (emulator pkgs/AVD),
+  this HANDOFF.
+- Outside repo (never committed): `~/Android/Sdk` additions,
+  `~/.android/avd/notebookocr-test.*`, `/tmp/opencode/emulator*.log`.
 
 ## Commands actually run
-- `./gradlew --version` / `--stop` (daemon JVM now JDK 21)
-- `sdkmanager --licenses` (accepted), install platform-tools,
-  `platforms;android-37.2`, `build-tools;37.0.0`
-- `npm run typecheck`, `npm run lint`, `npx jest --runInBand`
-- `cd android && ./gradlew assembleDebug` → BUILD SUCCESSFUL in 5m 46s
-- `aapt dump badging …/app-debug.apk`; `sha256sum` → b5efbf06…79429
+- `./gradlew assembleDebug` (up-to-date, BUILD SUCCESSFUL)
+- `sdkmanager "emulator" "system-images;android-36;default;x86_64"`
+- `emulator -accel-check` → KVM requires vmx/svm
+- `emulator -list-avds` → notebookocr-test
+- `emulator -avd notebookocr-test -no-window -no-audio -no-boot-anim
+  -gpu swiftshader_indirect -no-snapshot` → exit 1 (log kept)
+- `adb devices` → empty (daemon started fine)
 
-## Tests passed / not run
-- Passed: typecheck, lint, 38 jest tests, Gradle debug build, APK metadata
-  + non-empty + hash verification.
-- Not run: install/launch on device or emulator (no target available).
+## Verification results
+- Emulator/system-image version + ABI: 37.3.10.0 / android-36 default x86_64
+- Device serial: none (no device ever attached)
+- Install/launch: NOT PERFORMED (no target) — no crash logs exist
+- UI checks 1–11: ALL UNVERIFIED on-device; jest App flow test is the only
+  executed UI verification
+- Screenshots/logs: none from device; emulator logs at
+  `/tmp/opencode/emulator.log` and `/tmp/opencode/emulator-tcg.log`
 
-## Known failures
-- None in the build. Only remaining gap is on-device verification.
+## Known failures + first actionable causes
+- Boot refusal: host lacks nested virtualization (no vmx/svm, no /dev/kvm);
+  current emulator mandates hardware accel for x86_64 guests. Fix requires
+  a KVM-capable host or physical device — not an in-guest package install.
 
 ## Next exact task
-On a KVM-capable host or physical device: `. env/android.sh`,
-`adb install -r android/app/build/outputs/apk/debug/app-debug.apk`,
-launch NotebookOCR, and walk the TEST_MATRIX manual flows. Do NOT start
-PaddleOCR integration in this step.
+On a KVM-capable host (reuse this AVD definition there): boot
+`notebookocr-test`, `adb install -r
+android/app/build/outputs/apk/debug/app-debug.apk`, discover the launchable
+activity via `aapt dump badging` (`com.notebookocr`), launch, and walk
+TEST_MATRIX checks 1–11 with device network disabled for check 8. Then do
+a release/bundled-JS build to prove standalone offline behavior. Do NOT
+start PaddleOCR integration in that step.
 
 ## Commit
-Toolchain + docs commit on `main` (see `git log`). SDK/JDK/caches/APK and
-machine-local paths excluded. Nothing pushed.
+Docs-only commit on `main` (see `git log`). Nothing pushed.
