@@ -1,0 +1,15 @@
+# Mixed page sample — reference transcription
+# Image: samples/images/mixed.png (900x1300, synthetic)
+# Reading order: text, table, equation.
+
+## Text
+Quiz results for group B.
+Scores are out of 10 points.
+
+## Table (3 rows x 3 columns; row 2, column 3 blank)
+Name | Score | Grade
+Asha | 8.5   | B+
+Ravi |       | A
+
+## Equation (LaTeX)
+\bar{x} = \frac{8.5 + 9.0}{2}

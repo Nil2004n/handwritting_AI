@@ -1,0 +1,49 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'ai.notebookocr'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+dependencies {
+    // ONNX Runtime, CPU execution (includes linux-x64 natives).
+    implementation 'com.microsoft.onnxruntime:onnxruntime:1.22.0'
+
+    // JavaFX 21 LTS (explicit platform classifiers; project is non-modular).
+    implementation 'org.openjfx:javafx-controls:21.0.7'
+    implementation 'org.openjfx:javafx-graphics:21.0.7:linux'
+    implementation 'org.openjfx:javafx-base:21.0.7:linux'
+    implementation 'org.openjfx:javafx-controls:21.0.7:linux'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.12.2'
+    // Align with jupiter 5.12.2 (Gradle's bundled launcher is newer and breaks discovery).
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+}
+
+application {
+    mainClass = 'notebookocr.ui.Main'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+// Phase 0 gate: load + introspect the PaddleOCR ONNX sessions, no inference.
+tasks.register('verifyOcrSetup', JavaExec) {
+    group = 'verification'
+    description = 'Loads detector/recognizer ONNX sessions and prints their I/O metadata.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookocr.ocr.OcrSetupCheck'
+}

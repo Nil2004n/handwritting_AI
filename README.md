@@ -1,45 +1,46 @@
-# NotebookOCR (Phase 0 — demo slice)
+# NotebookOCR (Java desktop, Phase 0 — OCR setup)
 
-Offline Android handwriting-to-digital-text app. **Phase 0 contains NO real
-OCR**: every result is deterministic mock data, always labeled
-"Demo mode — OCR is not connected."
+Offline handwritten-text OCR groundwork as a plain Java 21 desktop app.
+**Phase 0 loads and validates PaddleOCR PP-OCRv6_small ONNX models through
+ONNX Runtime. No image-to-text extraction exists yet.**
 
 ## What works
-- Demo document list (prose, numericals, table, equation, mixed page).
-- "Extract demo" through the shared OCR interface (simulated latency).
-- Document review: source image + selectable region overlay, ordered blocks,
-  raw output shown separately from editable results.
-- Text / table-cell / LaTeX editing; edits persist per document for the app
-  session. Reset requires explicit confirmation.
-- Offline equation preview (small LaTeX subset, bundled renderer).
+- `./gradlew verifyOcrSetup` — validates model files + checksums, loads the
+  detector and recognizer sessions (CPU), prints their I/O metadata, reads
+  the recognizer dictionary, closes native resources. Exit 0 on success,
+  exit 1 with a clear error otherwise.
+- `./gradlew run` — JavaFX window named NotebookOCR with setup status,
+  model identity, a "Verify OCR Setup" button (runs in background), and a
+  results area. No extraction, camera, tables, or persistence.
+- `./gradlew clean build` — compiles, runs JUnit tests.
 
 ## Prerequisites
-- Node >= 22.11, npm 12+ (repo pins a lockfile; use npm, not yarn).
-- For the APK: JDK 17 and the Android SDK with `ANDROID_HOME` set
-  (NOT present in this dev container — build is blocked here).
+- JDK 21 (project toolchain; system-wide default untouched).
+- Network once for Gradle/Maven dependencies and `tools/download-models.sh`.
 
 ## Setup & run
 ```sh
-npm install
-npm start            # Metro bundler
-npm run android      # needs Android SDK + device/emulator
-npm test             # jest — 38 tests
-npm run typecheck    # tsc --noEmit
-npm run lint         # eslint
-node scripts/generate-fixtures.mjs   # regenerate synthetic sample images
+sh tools/download-models.sh   # models + checksums.sha256 verification
+./gradlew clean build          # compile + unit tests
+./gradlew verifyOcrSetup       # load sessions, print I/O metadata
+./gradlew run                  # JavaFX window (needs a display)
 ```
+The `models/` binaries (`*.onnx`, pairing `*.yml`) are git-ignored and
+reproduced by the download script; `models/checksums.sha256` is committed.
 
-Note (npm 12): scaffolding used
-`rnc-cli init --skip-install --skip-git-init` followed by plain
-`npm install`, because the CLI's template download trips npm 12's
-project-scoped `--allow-scripts` restriction. See `docs/KNOWN_ISSUES.md`.
+## Verification status
+- `verifyOcrSetup`: PASS (exit 0) — see MODEL_MANIFEST.md for observed I/O.
+- Missing/corrupt assets: clear error, exit 1 (unit-tested + manually run).
+- UI: process starts, JavaFX toolkit initializes, no crash — but on this
+  host the stage never mapped (locked screensaver session), so interactive
+  window verification is PENDING. See HANDOFF.md.
 
 ## Docs
-`docs/PLAN.md` · `ARCHITECTURE.md` · `NATIVE_API.md` (proposed, not built) ·
-`MODEL_MANIFEST.md` (planned only) · `TEST_MATRIX.md` · `KNOWN_ISSUES.md` ·
-`HANDOFF.md`.
+`MODEL_MANIFEST.md` (sources, files, checksums, license, verified-vs-untested) ·
+`HANDOFF.md` (this phase: work, results, blockers, next task). The previous
+React Native/Android implementation is preserved under the
+`archive/android-rn-phase0` tag.
 
 ## Boundaries
-No camera/gallery, cloud, auth, database, export, signing, or real models.
-PaddleOCR text output must never be presented as table reconstruction or
-equation recognition — the UI labels all fixture equations manual/demo.
+No real OCR extraction, no OpenCV, no Python/Spring/server/cloud, no
+camera, no Android work. Session loading is not proof of working OCR.

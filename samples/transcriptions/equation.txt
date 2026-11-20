@@ -1,0 +1,10 @@
+# Equation sample — reference transcription (LaTeX)
+# Image: samples/images/equation.png (900x700, synthetic)
+# Covers fraction, superscript, subscript, square root.
+# Seeds are hand-typed demo data, NOT recognizer output.
+
+## Equation 1 (needs review)
+\frac{x^2 + 3x + 2}{x + 1} = x + 2
+
+## Equation 2
+A = \sqrt{b_1^2 + b_2^2}

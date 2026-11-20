@@ -1,0 +1,15 @@
+# Prose sample — reference transcription
+# Image: samples/images/prose.png (900x1200, synthetic)
+# Note: block 1 contains an intentional transcription error ("teh").
+
+## Block 1 (needs review)
+Teh quick brown fox jumps over
+teh lazy dog near the river.
+
+## Block 2
+Handwriting notes from the
+field trip on Tuesday morning.
+
+## Block 3
+Remember to copy the lab
+results into the shared notebook.

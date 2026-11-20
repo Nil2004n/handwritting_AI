@@ -1,0 +1,19 @@
+# Numericals sample — reference transcription
+# Image: samples/images/numericals.png (900x1200, synthetic)
+# Nothing is solved or evaluated; transcription only.
+# Step 3 is flagged ambiguous ("7" vs "1", circled on the page).
+
+## Statement
+Problem 4: a cart of mass 2.50 kg
+accelerates at -3.2 m/s^2.
+
+## Steps 1-2
+Step 1: F = m * a
+Step 2: F = 2.50 * (-3.2) = -8.0 N
+
+## Steps 3-4 (needs review)
+Step 3: W = F * d = -8.0 * 1.75 (?) = -14.0 J
+Step 4: check units: N * m = J
+
+## Result equation (LaTeX)
+E = \frac{1}{2} m v^2
