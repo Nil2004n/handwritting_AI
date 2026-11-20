@@ -1,25 +1,26 @@
-# Known issues (Phase 0)
+# Known issues (updated 2026-11-20 — toolchain provisioned)
 
-1. **No Android SDK in this environment.** `ANDROID_HOME` unset; only a
-   Debian stub at `/usr/lib/android-sdk` (no platforms/platform-tools).
-   `./gradlew assembleDebug` fails with "SDK location not found" after
-   successfully resolving Gradle 9.4.1 + plugins. No APK has been built;
-   no device testing performed.
-2. **npm 12 `--allow-scripts` vs RN CLI init.** `rnc-cli init` runs a
-   project-scoped `npm install --save <template>` which npm 12 rejects.
-   Workaround used: `init --skip-install --skip-git-init`, then plain
-   `npm install` inside the project (works; no pending script approvals).
-   Future contributors on npm 12+ should use the same flags.
-3. **JDK mismatch risk (unverified).** Environment Java is 25; React Native
-   0.88/AGP expects JDK 17. Even with an SDK installed, the build may need
-   `org.gradle.java.home` pointed at JDK 17. Not tested (blocked by #1).
-4. **Test renderer counts.** The RN jest mock duplicates `testID` across
-   composite + host nodes; UI tests query composite nodes via
-   `src/testUtils/queries.ts`. If the preset changes its mocks, counts may
-   need revisiting (behavior assertions are unaffected).
-5. **Equation preview is a subset.** Only `\frac \sqrt \bar ^ _ \pm \times
-   \cdot \leq \geq \neq` plus groups render; anything else shows the local
-   error box. That is the specified behavior, listed here so nobody mistakes
-   it for full LaTeX.
-6. **No persistence.** Edits live for the app session only. Intended for
-   Phase 0.
+## Resolved
+1. ~~No Android SDK~~ — FIXED: user-scoped SDK at `~/Android/Sdk`
+   (cmdline-tools 22.0, platform-tools, android-37.2, build-tools 37.0.0);
+   `./gradlew assembleDebug` → BUILD SUCCESSFUL, APK verified (see
+   TEST_MATRIX.md). `sdk.dir` in git-ignored `android/local.properties`.
+2. ~~JDK mismatch~~ — FIXED without touching the system default: Gradle
+   daemon JVM pinned to existing JDK 21 via `~/.gradle/gradle.properties`
+   (`java -version` still 25; `./gradlew --version` daemon JVM is 21).
+3. ~~npm 12 `--allow-scripts` vs RN CLI init~~ — unchanged workaround, still
+   documented: init with `--skip-install --skip-git-init`, then plain
+   `npm install` inside the project.
+
+## Still open
+4. **No emulator / device testing.** Host is a VM without nested
+   virtualization (no vmx/svm, no /dev/kvm); a hardware-accelerated AVD is
+   impossible from this container and an unaccelerated x86_64 image would be
+   unusably slow. Alternative: install the debug APK on a physical device
+   (`adb install`) or a KVM-capable host. APK build success stands on its own.
+5. Test renderer counts: the RN jest preset duplicates `testID` on composite
+   + host nodes; UI tests query composite nodes via
+   `src/testUtils/queries.ts`. Revisit if the preset changes its mocks.
+6. Equation preview is a deliberate subset (`\frac \sqrt \bar ^ _ \pm \times
+   \cdot \leq \geq \neq` + groups); anything else shows the local error box.
+7. No persistence: edits live for the app session only (Phase 0 design).
