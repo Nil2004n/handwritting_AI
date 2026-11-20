@@ -11,7 +11,7 @@ if [ -z "$ANDROID_SDK_ROOT" ]; then
 fi
 case ":$PATH:" in
   *":$ANDROID_HOME/cmdline-tools/latest/bin:"*) ;;
-  *) export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH" ;;
+  *) export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH" ;;
 esac
 # Gradle daemon JVM: JDK 21 (project needs 17+; system default stays Java 25).
 export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"

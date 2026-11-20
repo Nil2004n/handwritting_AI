@@ -29,6 +29,30 @@
    definition kept at `~/.android/avd/notebookocr-test.*` for reuse on a
    KVM-capable host. Alternative: `adb install` the debug APK on a physical
    device. APK build success stands on its own.
+   **Triage (2026-11-20, class F — host virtualization): re-verified.**
+   `/dev/kvm` absent, 0 vmx/svm flags in `/proc/cpuinfo`, `systemd-detect-virt`
+   = oracle (VirtualBox guest), `emulator -accel-check` → "KVM requires a CPU
+   that supports vmx or svm". Classes A–E, G–I ruled out: build succeeds on
+   JDK 21, SDK complete, x86_64 image matches APK ABIs, 8 GB RAM. Not fixable
+   inside the guest (no package/permission change creates vmx). Also fixed:
+   `emulator` was not on PATH after sourcing `env/android.sh` (it lives in
+   `$ANDROID_HOME/emulator`); the script now adds it. Disk is now ~12 GB free
+   (88% used) — watch before adding NDK/ABIs.
+   **Host actions (any one):** (a) VirtualBox: shut down VM, enable
+   "Nested VT-x/AMD-V" (`VBoxManage modifyvm <vm> --nested-hw-virt on`; needs
+   VT-x/AMD-V on in host BIOS, and Hyper-V/WSL2 conflicts resolved on Windows
+   hosts; note: newer VirtualBox on Windows hosts may not support nesting
+   well), then confirm `ls -l /dev/kvm` and add user to `kvm` group via
+   normal group membership (no chmod 777). (b) Run the emulator on the host
+   OS/Android Studio and install the APK there. (c) Use a physical device:
+   enable Developer options + USB debugging, then from this repo:
+   `. env/android.sh; adb devices` (accept RSA prompt),
+   `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`,
+   `adb reverse tcp:8081 tcp:8081`, `npm start` (Metro, debug APK needs it),
+   `adb shell am start -n com.notebookocr/.MainActivity`,
+   `adb logcat --pid=$(adb shell pidof com.notebookocr)` for crashes.
+   (USB passthrough into the VM is required if adb runs in this guest.)
+   Keep adb bound to localhost; never `adb tcpip` on a public network.
 5. Test renderer counts: the RN jest preset duplicates `testID` on composite
    + host nodes; UI tests query composite nodes via
    `src/testUtils/queries.ts`. Revisit if the preset changes its mocks.
