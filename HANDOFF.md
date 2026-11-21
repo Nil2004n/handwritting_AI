@@ -609,3 +609,31 @@ evaluation of THIS candidate is not justified by these results; gather more page
 further recognizer. Limitations: 2 photos, 1 writer/notebook, no digits/equation ground truth, single run settings, other models
 (e.g. TrOCR) not tried. Production, default decoder/padding/preprocessing and UI routing were not touched (default eval and 71 tests
 re-run unchanged).
+
+## Phase 3 closure (2026-11-22): corrected results and final checkpoint
+Corrections to earlier reports:
+1. Repository-photo WER "4/13" (Phase 3/3b) vs "5/13" (Phase 3c onward) is NOT a metric change. Reproduced at the two commits with the
+   same manifest, same models, same metric rules (raw code points; whitespace tokens; no normalization):
+   - `a6749ee` (before the fix): line 3 = `My Nowve leiy` (12 hyp words): `My` matches, `Name`->`Nowve`, `is`->`leiy`, `Debjoy.` deleted
+     = 3 word edits + `COMPLLCATED` = 4 -> WER 4/13 = 0.308; CER 12/67.
+   - `d2e7c3a` (bicubic-kernel fix): line 3 = `Sty Nove to leiy` (13 hyp words): 4 substitutions + `COMPLLCATED` = 5 -> WER 5/13 = 0.385;
+     CER still 12/67 (character edits coincide).
+   Cause: the kernel fix changed the pixels of the tilted line-3 crop (it had been ~16 gray levels too dark), which changed this
+   low-margin line's decode (`My` -> `Sty`). So 4/13 is the pre-fix figure and 5/13 is the current figure; both are correct for
+   their commits. Neither is an accuracy gain or loss attributable to "better preprocessing": the output is sensitive to tiny input changes.
+2. Recognizer source crops were confirmed identical by CONTENT for the PP-OCRv5 trial: `ctcProbe` now prints the SHA-256 of each
+   crop's BGR bytes plus its dimensions; baseline and candidate runs gave identical hash lists for all regions (repo photo 3/3,
+   private photo 6/6, print 4/4). (Earlier statements relied on matching dimensions only.)
+Final default-pipeline results (unchanged, current HEAD): repo photo CER 12/67 (0.179), WER 5/13 (0.385); private photo CER 5/91
+(0.055), WER 3/18 (0.167); rendered print CER 0. `clean build` 71 tests green, `verifyOcrSetup` ok; bundled rec.onnx sha256 `5435fd74…`.
+PP-OCRv5 server rec: REJECTED FOR INTEGRATION ON THE CURRENT EVIDENCE only (two photos from one notebook/writer, no digit/equation
+ground truth). This is not a claim about the model's suitability for handwriting in general.
+Review before push: unpushed diff contains no images, tensors, models, caches or env files (net); `eval-local/` stays git-ignored;
+production source has no expected-text logic or replacement rules; experiments (`-Dnotebookai.exp.cropPad`, `-Dnotebookai.exp.beam`)
+are opt-in JVM properties, default off, and shown in `identity()`. Note for the record: `HANDOFF.md` quotes the sample sentences
+(already present in the pushed history and in the committed `samples/transcriptions`) and history contains one transient 24 KB
+compiled `.pyc` (added in `8654c98`, untracked in `47f13d6`; contains only the script's local path and code strings, no private data).
+It cannot be removed without rewriting history, which was not done.
+Commands: `./gradlew clean build verifyOcrSetup`; `./gradlew evaluate -PevalManifest=eval/cases.tsv` (and `eval-local/cases.tsv`);
+`./gradlew ctcProbe -PevalManifest=M` (per-region output and crop hashes); cross-check: `crossCheckDump` + `tools/xcheck/*.py`
+(see Phase 3c/3d); candidate trial: see Phase 3e.
