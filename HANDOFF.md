@@ -770,3 +770,29 @@ Scope and acceptance criteria:
    verified with a temporary user-owned prefix. No sudo, no change to `/usr/local`.
 7. **Preserve OCR behaviour** (models, decoder, experiments off, preprocessing): verified by the manifests, not assumed.
 8. **Installed-app release verification** on a private display, final docs, release assessment (no tag/release/installer).
+
+### Phase 5 results (2026-11-21, Linux only; Windows/macOS NOT tested)
+Defects found by inspection, fixed, and covered by tests (cause -> fix):
+- Workers caught only `Exception`; an `Error` (OOM) left the app busy/saving forever -> `BackgroundTasks` (Throwable-safe, exactly one completion).
+- Save-then-New/Open/Quit discarded edits typed during the async save -> `ShutdownPolicy.mayProceedAfterSave` + re-prompt. GUI-verified.
+- Close during OCR/import/open closed at once (daemon threads, sessions never closed) -> "wait, then ask" policy; `stop()` closes OCR sessions. GUI-verified (close during OCR, with Cancel and Discard).
+- Saved crop/regions that do not fit the rebuilt frame were silently clamped -> `PageRestore` discards them with a notice.
+- A 120 MP image could imply >1 GB decoded -> `MemoryGuard` (~12 B/px vs 70% of max heap) refuses BEFORE decoding (import and page activation).
+- Gradle-calling make targets could run as root (cause: `sudo make build`, from the journal) -> `check-not-root`; `make install` never builds.
+Limits (`ProjectStore.Limits`): maxImageBytes = one original image (entry uncompressed size); maxJsonBytes = expanded project.json;
+maxTotalBytes = archive file size AND sum of expanded bytes read; maxPixels = header w*h before any decode; pages/regions are counts.
+Defaults: see the `MAX_*` constants in `ProjectStore`. Boundaries tested exactly (+-1) with tiny limits; default maxima themselves were NOT stress-tested.
+Tests: 130 JUnit tests pass (`./gradlew clean build`); `tools/verify-install.sh` 18/18 (temporary user-owned prefix, no sudo, no /usr/local).
+Stress (generated non-private images, installed app, Xvfb): 30 x 12 MP JPEG import 3.1 s; 45 + 180 page switches: RSS 0.6 -> 2.0-2.5 GB
+peak (HWM 2.59 GB), Java heap after GC stayed 0.18-0.46 GB (RSS is mostly freed-but-unreturned heap and native memory; not measured exactly);
+48 MP page opens; 150 MP image rejected with a clear message; 10 extractions on 1500x700 pages fine; 16 x 12 MP random-noise project saved to a
+186 MB file in ~2 s with an edit made during the save (kept unsaved, file held the snapshot). Inactive pages are not kept decoded
+(thumbnails only); only the active page is decoded. Measurement limit: RSS sampling, no native memory tracking. 4 GB-RAM-class machine assumed;
+projects approaching the 2 GiB total limit were NOT tested.
+OCR baselines re-measured after all changes (unchanged): repo photo CER 12/67, WER 5/13; private photo CER 5/91, WER 3/18; print exact.
+GUI findings of note: GTK dialog typed names may get a doubled `.nbai` (the app only appends when missing; dialog behaviour, not changed).
+Unverified in Phase 5: fresh installed-GUI multi-page regression (per-page straighten, region copy/insert, reorder, export clipboard) — my scripted
+clicks were unreliable; relies on Phase 4 GUI pass + automated pixel/reconstruction tests; privileged `sudo make install` not exercised; crash/power-loss durability
+is not claimed (write-temp, fsync, validate, atomic rename only).
+Release assessment: **implementation complete; acceptance pending** — blocker: the installed-GUI multi-page regression above was not re-run in Phase 5.
+No tag, GitHub release or installer created; Phase 5 commits are local and unpushed.

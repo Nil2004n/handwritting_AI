@@ -393,6 +393,7 @@ public class NotebookAiApp extends Application {
     private void closeIfRequested() {
         if (closeRequested && !jobRunning && !saving) {
             closeRequested = false;
+            statusLabel.setText("Operation finished.");
             requestClose();
         }
     }

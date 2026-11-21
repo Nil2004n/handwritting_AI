@@ -70,6 +70,16 @@ sh tools/download-models.sh   # models + sha256sum verification
 ./gradlew clean build
 ```
 
+## Safe build/install (Phase 5)
+Build as your normal user, install with the privilege the prefix needs. Build targets refuse to run as root; `make install` only copies the staged build.
+```sh
+make build models                      # normal user, never sudo
+make install PREFIX="$HOME/.local"     # user-local, no sudo
+sudo make install                      # optional system-wide; copy only
+sh tools/verify-install.sh             # checks the above in a temporary prefix
+```
+Tested on Linux only. Closing the window while OCR/import/open/save runs waits for it (nothing is cancelled). Project limits: see HANDOFF.md.
+
 ## Install globally (Makefile)```sh
 make build models             # as your normal user (compiles, fetches models)
 make install                  # user-local if PREFIX is writable, else rerun:
