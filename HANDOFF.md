@@ -250,3 +250,47 @@ clicking on the image, combined crop+rotate+reset, the system-wide `/usr/local` 
 Character errors (model limits, not pipeline): `COMPLLOATED` is read identically from every manual crop of line 2
 (tight, +10/25/50/80px pad, word-only); `Debjoy` is unstable with padding (`Debjay`, `debjay`, `dehjay`, `Sebjon`).
 Auto crops were clean (no neighbor leakage). No replacement rules were added.
+
+## Phase 2 closure (acceptance pass)
+**Status: Accepted** for the Phase 2 scope below, with the OCR-accuracy limitation and gaps listed here.
+
+Scope delivered: named-module JavaFX window; working-image preparation (rotate 90 deg, straighten +-10 deg, rectangular
+crop, Reset) on an immutable oriented source; Extract Page; Recognize Selection (detector+recognizer) and Recognize Line
+(recognizer only); region list/overlay/detail/thumbnail with click-to-select; editable transcript with raw output kept
+read-only and Restore Raw; Copy Text / Copy Region / Copy Selection and Insert at Caret; build identity line.
+
+Acceptance method: real GUI (xdotool + xclip) on a private Xvfb `:77` driving the installed `~/.local` launcher
+(jar sha256 prefix compared with the staged `build/install` jar before every session; last: `927f63ef60fc`).
+Shared display `:0` and other windows were not touched. `/usr/local` (system) copy was NOT updated (sudo needs a password).
+
+| Check | Method | Outcome |
+|---|---|---|
+| A. Click a region on the image | GUI | Pass: overlay, list entry, raw text, det/rec scores (match CLI) and thumbnail stay in sync; also on a cropped/rescaled image; click in letterbox deselects cleanly |
+| B. crop -> rotate -> reset | GUI | Pass after fix: crop applies to working image only; original file hash unchanged; Reset restores original frame and clears results/overlay; Extract on the reset image is byte-identical to CLI `recognizeImage` rotate 0. **Defect found/fixed**: rotating after a crop reused the crop rect in the new frame; crop is now cleared with a status note |
+| C. Job failure + recovery | GUI, throwaway copy of the models via `NOTEBOOK_AI_MODELS` renamed away and back (installed models untouched) | Pass: visible "Failed: OCR setup incomplete..." message, all controls re-enabled, next Extract in the same app succeeded |
+| D. Stale-result protection | GUI + automated | GUI: every state-changing control is disabled while a job runs, attempted clicks mid-job had no effect and the result was not overwritten (the scenario is unreachable from the UI). Guard itself: automated only (`WorkingImageTest`: each real mutator invalidates an in-flight job; `isCurrentJob`), not exercised through the JavaFX job thread |
+
+Builds/tests: `./gradlew clean build` -> 53 tests, 0 failures; `./gradlew verifyOcrSetup` -> setup valid; `make build`;
+`make install PREFIX=$HOME/.local` (no shadowing warning). CLI regressions unchanged vs previous pass: rendered print
+4/4 lines exact; `samples/handwriting-test.jpg` -> `This is how it's done | LIFE ITSELF IS COMPLLCATED | My Nowve leiy`;
+synthetic scribble samples give pseudo-text (not meaningful).
+
+### Known OCR accuracy limitation (not solved)
+Image `~/Desktop/test.jpg` (sha256 prefix `acc880a8b518c316`, 4000x1800), one Left rotation:
+`./gradlew recognizeImage -Pimage=$HOME/Desktop/test.jpg -Protate=3`
+```
+This is how it's done            (correct)
+LIFE ITSIELF IS COMPLLOATED      (expected: LIFE ITSELF IS COMPLICATED)
+My Name is dehjay                (expected: My Name is debjoy)
+The work is on progress.         (correct text; structure now one line)
+```
+Errors: extra "I" in ITSELF, COMPLICATED and debjoy misread. Earlier manual-crop experiments showed `LLOATED` is stable across
+crops and `Debjoy` varies with padding (`Debjay`, `debjay`, `dehjay`, `Sebjon`); this does not prove the cause is
+model-only. The true-BGR decode fix was a correctness fix and did NOT demonstrably improve accuracy on this image
+(some words better on other samples, some worse here). No replacement rules, dictionaries or expected-text logic exist.
+A tighter crop of the same page (GUI) read different text (e.g. `Debjay.`), i.e. results are input-sensitive.
+
+### Remaining gaps
+- System-wide `/usr/local` install not refreshed (run `sudo make install`).
+- Recognize Selection/Line failure path and the JavaFX job-thread stale-result path were not driven in the GUI.
+- Single real handwriting page for accuracy; no accuracy benchmark exists.
