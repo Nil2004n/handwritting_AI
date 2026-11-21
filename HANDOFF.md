@@ -123,6 +123,16 @@ System-wide equivalent: `sudo make install` (needs the user's password;
 no passwordless sudo here). `make system-deps` opt-in apt-installs
 openjdk-21-jre. No runtime downloads, no version changes.
 
+## sudo build fix (2026-11-21)
+`sudo make install` failed with `Unsupported class file major version 69`:
+as root, Gradle lost the user's `~/.gradle/gradle.properties` JDK pin and
+ran on Java 25. Fixed in the Makefile two ways: (1) every Gradle call now
+passes `-Dorg.gradle.java.home=<jdk21>` when that path exists (verified
+with an empty HOME: daemon JVM is JDK 21); (2) `install` no longer builds
+as root — it verifies the staged dist + checksums and only copies files, so
+the documented flow is `make build models` (user) then `sudo make install`.
+No root-owned files were left in the repo (the failed run died at startup).
+
 ## Commit
 Phase 1 commit on `main` (see `git log`). Models stay git-ignored;
 no push.

@@ -1,15 +1,17 @@
 # notebook-ai — install, test and run the offline Java OCR desktop app.
 #
-# Usage:
-#   make build                  compile + installDist (no root needed)
-#   make test                   full clean build + unit tests
-#   make verify                 load ONNX sessions, print I/O metadata
-#   make recognize IMAGE=...    OCR one image via the CLI
-#   make install                install globally (PREFIX=/usr/local;
-#                               rerun with sudo if the prefix is not writable)
-#   make install PREFIX=$HOME/.local   user-local install, no root needed
-#   make uninstall               remove installed files
-#   make system-deps             install the Java 21 runtime via apt (asks sudo)
+# Recommended flow:
+#   make build models          # as your normal user (compiles, fetches models)
+#   make install               # copies files (rerun with sudo for /usr/local)
+#   sudo make install          # system-wide install (builds nothing as root)
+#
+# Other targets:
+#   make test                  # full clean build + unit tests
+#   make verify                # load ONNX sessions, print I/O metadata
+#   make recognize IMAGE=...   # OCR one image (JPG/PNG)
+#   make install PREFIX=$HOME/.local   # user-local install, no root needed
+#   make uninstall [PREFIX=...]
+#   make system-deps           # apt-install openjdk-21-jre (prompts for sudo)
 #   make run | make clean | make help
 #
 # Installed layout: $(PREFIX)/lib/notebook-ai/{bin,lib,models},
@@ -21,41 +23,52 @@ DESTDIR ?=
 APP_DIR = $(DESTDIR)$(PREFIX)/lib/notebook-ai
 BIN_DIR = $(DESTDIR)$(PREFIX)/bin
 
-.PHONY: help build models test verify recognize run clean install uninstall system-deps
+# Gradle itself must run on a JVM it supports (Gradle 8.14: up to Java 24).
+# Pin the daemon JVM when a JDK 21 is present so a Java-25 default — or a
+# sudo environment without the user's ~/.gradle/gradle.properties — never
+# breaks the build with "Unsupported class file major version".
+GRADLE_FLAGS :=
+ifneq (,$(wildcard /usr/lib/jvm/java-21-openjdk-amd64))
+GRADLE_FLAGS += -Dorg.gradle.java.home=/usr/lib/jvm/java-21-openjdk-amd64
+endif
+GRADLE = ./gradlew $(GRADLE_FLAGS)
+
+.PHONY: help build models test verify recognize run clean install uninstall system-deps check-dist check-models
 
 help:
 	@echo "Targets: build test verify recognize run clean install uninstall system-deps"
-	@echo "  make build                  compile + stage installDist"
-	@echo "  make test                   clean build + unit tests"
-	@echo "  make verify                 ./gradlew verifyOcrSetup"
-	@echo "  make recognize IMAGE=path   OCR one image (JPG/PNG)"
-	@echo "  make install [PREFIX=...]   install app + models + launcher"
+	@echo "  make build models         compile, stage installDist, fetch models (as user)"
+	@echo "  make test                 clean build + unit tests"
+	@echo "  make verify               ./gradlew verifyOcrSetup"
+	@echo "  make recognize IMAGE=...  OCR one image (JPG/PNG)"
+	@echo "  make install [PREFIX=...] copy staged app + models + launcher"
+	@echo "                            (run 'make build models' first; sudo only for copy)"
 	@echo "  make uninstall [PREFIX=...] remove installed files"
-	@echo "  make system-deps            apt-install openjdk-21-jre (sudo)"
-	@echo "  make run                    launch the JavaFX UI (needs display)"
-	@echo "  make clean                  gradle clean"
+	@echo "  make system-deps          apt-install openjdk-21-jre (sudo)"
+	@echo "  make run                  launch the JavaFX UI (needs display)"
+	@echo "  make clean                gradle clean"
 
 build:
-	./gradlew installDist
+	$(GRADLE) installDist
 
 models:
 	sh tools/download-models.sh
 
 test:
-	./gradlew clean build
+	$(GRADLE) clean build
 
 verify:
-	./gradlew verifyOcrSetup
+	$(GRADLE) verifyOcrSetup
 
 recognize:
 	@if [ -z "$(IMAGE)" ]; then echo "Usage: make recognize IMAGE=/path/to.jpg"; exit 2; fi
-	./gradlew recognizeImage -Pimage="$(IMAGE)"
+	$(GRADLE) recognizeImage -Pimage="$(IMAGE)"
 
 run:
-	./gradlew run
+	$(GRADLE) run
 
 clean:
-	./gradlew clean
+	$(GRADLE) clean
 
 # System Java 21 runtime (explicit opt-in; prompts for sudo).
 system-deps:
@@ -65,7 +78,21 @@ system-deps:
 		echo "No apt-get found. Install a Java 21+ runtime (JRE) manually."; exit 1; \
 	fi
 
-install: build models
+# The staged distribution must already exist (built as the normal user, so
+# `sudo make install` never compiles or downloads anything as root).
+check-dist:
+	@if [ ! -x build/install/notebook-ai/bin/notebook-ai ]; then \
+		echo "error: staged app missing; run 'make build' first (as your normal user)."; \
+		exit 1; \
+	fi
+
+check-models:
+	@if ! (cd models && sha256sum -c checksums.sha256 >/dev/null 2>&1); then \
+		echo "error: models missing or invalid; run 'make models' first (as your normal user)."; \
+		exit 1; \
+	fi
+
+install: check-dist check-models
 	@if [ ! -w "$(DESTDIR)$(PREFIX)" ]; then \
 		echo "error: $(DESTDIR)$(PREFIX) is not writable; rerun with sudo, e.g.:"; \
 		echo "  sudo make install"; \
