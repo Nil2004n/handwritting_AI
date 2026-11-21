@@ -159,6 +159,12 @@ tasks.register('evaluate', JavaExec) {
     description = 'Runs CER/WER evaluation: -PevalManifest=eval/cases.tsv [--debugDir=...].'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'notebookai.eval.Evaluate'
+    if (project.hasProperty('warmup')) {
+        args '--warmup', project.property('warmup')
+    }
+    if (project.hasProperty('repeat')) {
+        args '--repeat', project.property('repeat')
+    }
     if (project.hasProperty('expJvm')) {
         jvmArgs project.property('expJvm').split(' ')  // opt-in experiment flags, e.g. -Dnotebookai.exp.cropPad=0.5
     }

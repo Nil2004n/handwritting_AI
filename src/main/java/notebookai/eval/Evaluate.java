@@ -188,11 +188,17 @@ public final class Evaluate {
     public static void main(String[] args) {
         Path manifest = null;
         Path debugDir = null;
+        int warmup = 0;
+        int repeat = 0;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--manifest") && i + 1 < args.length) {
                 manifest = Paths.get(args[++i]);
             } else if (args[i].equals("--debug-dir") && i + 1 < args.length) {
                 debugDir = Paths.get(args[++i]);
+            } else if (args[i].equals("--warmup") && i + 1 < args.length) {
+                warmup = Integer.parseInt(args[++i]); // extra untimed runs per case (JIT/ORT warm-up)
+            } else if (args[i].equals("--repeat") && i + 1 < args.length) {
+                repeat = Integer.parseInt(args[++i]); // extra timed runs per case; reports rec/total mean+min
             }
         }
         if (manifest == null) {
@@ -226,6 +232,25 @@ public final class Evaluate {
                         continue;
                     }
                     t0 = r.timings();
+                    if (repeat > 0) {
+                        // Timing protocol: the first run above is cold; run `warmup` untimed, then `repeat` timed.
+                        try {
+                            for (int w = 0; w < warmup; w++) {
+                                evaluateCase(service, kase, null);
+                            }
+                            double[] rec = new double[repeat];
+                            double[] tot = new double[repeat];
+                            for (int k = 0; k < repeat; k++) {
+                                OcrResult.Timings tk = evaluateCase(service, kase, null).timings();
+                                rec[k] = tk.recMs();
+                                tot[k] = tk.totalMs();
+                            }
+                            System.out.printf("WARM timing over %d runs after %d warm-up: rec mean=%.0f min=%.0f ms | page total mean=%.0f min=%.0f ms%n",
+                                    repeat, warmup, mean(rec), min(rec), mean(tot), min(tot));
+                        } catch (OcrException e) {
+                            System.out.println("timing runs failed: " + e.getMessage());
+                        }
+                    }
                     System.out.println("=== " + kase.image() + " ===");
                     System.out.printf("transform: rotate=%d straighten=%.1f%n",
                             kase.rotateCw(), kase.straighten());
@@ -259,5 +284,21 @@ public final class Evaluate {
             System.err.println("Evaluation FAILED (I/O): " + e.getMessage());
             System.exit(1);
         }
+    }
+
+    private static double mean(double[] a) {
+        double s = 0;
+        for (double v : a) {
+            s += v;
+        }
+        return s / a.length;
+    }
+
+    private static double min(double[] a) {
+        double m = Double.MAX_VALUE;
+        for (double v : a) {
+            m = Math.min(m, v);
+        }
+        return m;
     }
 }
