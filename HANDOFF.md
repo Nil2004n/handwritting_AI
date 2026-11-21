@@ -429,3 +429,62 @@ lighting/angles/ruled and plain paper; each with the exact verbatim transcriptio
   venv, roughly 100 MB of PyPI downloads, no project dependency) was not done: needs approval.
 - Recognizer comparison: no candidate was researched or run; any download/model change needs approval and a specific candidate.
 - Beam search and crop padding need many more pages before any production decision.
+
+## Phase 3c: independent numerical cross-check (reference = upstream PaddleOCR v3.7.0 rules + cv2 + onnxruntime)
+Reference stack (disposable venv OUTSIDE the repo, not committed): onnxruntime 1.24.1 (Java uses 1.22.0; the oldest wheel for
+Python 3.14 is 1.24.1), opencv-python-headless 5.1.0, numpy 2.5.5, pyyaml. Upstream rules were re-implemented in
+`tools/xcheck/xcheck.py` from the fetched upstream v3.7.0 files `tools/infer/utility.py` (get_rotate_crop_image),
+`tools/infer/predict_rec.py` (resize_norm_img, batching), `ppocr/data/imaug/operators.py` (DetResizeForTest/NormalizeImage/
+ToCHWImage). cv2 is the reference only where upstream itself uses cv2 (resize, getPerspectiveTransform, warpPerspective).
+Method: `./gradlew crossCheckDump -PevalManifest=M -PoutDir=D` exports every stage's data from the production code; the script
+runs each reference stage on IDENTICAL input, so a mismatch is localized. Dumps (private image data) were deleted afterwards.
+Reproduce: `python3 -m venv V; V/bin/pip install -r tools/xcheck/requirements.txt;
+XC_MODELS=models V/bin/python tools/xcheck/xcheck.py DUMP/case0 /path/to/original.jpg`.
+Tolerances were fixed before looking at results (see the script docstring): decode mean<=1 level; rotate exact; det input
+mean<=0.01 max<=0.10; det inference max<=5e-3; warp mean<=1.5 p99.9<=10; rec input pad exactly 0, mean<=0.004, max<=0.06;
+rec inference max<=1e-3 and identical text.
+
+Stage results (both pages; "before" = commit a6749ee, "after" = d2e7c3a):
+| Stage | Before | After |
+|---|---|---|
+| JPEG decode (Java ImageIO vs cv2.imread, BGR) | identical (diff 0) | identical |
+| Rotation | exact | exact |
+| Detector input tensor (resize+normalize, 1x3x4000x1792) | PASS (mean 7e-7, max 0.0175 = 1 level) | PASS |
+| Detector inference, same tensor (ORT 1.22 vs 1.24) | PASS (max 6e-8, binarized disagreement 0) | PASS |
+| **Perspective warp of tilted crops** | **FAIL: Java darker by ~16 levels (mean 14-17, max 28) on every tilted crop; axis-aligned crop exact** | PASS (mean 0.000, max 1 level) |
+| Recognizer input (resize, pad, normalize, layout) on identical crop | PASS (pad exactly 0, max 1 level) | PASS |
+| Recognizer inference, same tensor | PASS (logits max diff <=1.4e-6, identical text) | PASS |
+| End-to-end Python path vs Java | text differed on 1 region (R2) | identical text on all regions of the private page |
+
+Confirmed defects (fixed, tests in `ReferenceParityTest`):
+1. `ImageOps.cubic()` mixed Keys a=-0.5 inner coefficients (1.5/-2.5) with the a=-0.75 outer branch; the four tap weights
+   summed to 0.9375..0.98 at fractional offsets, so every non-integer-aligned interpolation (tilted crops, straighten) was
+   darkened by up to ~12% in 2D. Now 1.25/-2.25 (weights sum to 1). Cause found by the cross-check; verified numerically.
+2. `DetPreprocess` rounded detector size with `Math.round` (half up) while upstream uses Python `round()` (half to even):
+   e.g. 1808 -> 1792 (upstream) vs 1824. Now `Math.rint`. Neither photo hits an exact .5.
+Neither defect explains the reported wrong words: after the fix edit counts are UNCHANGED (repo photo 12/67 CER, WER 4->5 words;
+private photo 5/91, WER 3/18; print 0). Specific wrong characters moved (`dehjay` -> `dedjay`; repo line 3 `My Nowve leiy`
+-> `Sty Nove to leiy`), i.e. the output is sensitive to tiny input changes. Private-page output now:
+`LIFE ITSIELF IS COMPLLOATED` / `My Name is dedjay`.
+
+Other findings (not defects): (a) padding width matters for this model: with upstream-style batching (6/batch, padded to the
+batch max width) repo-photo line 3 decodes differently (`Sy Nove leiy`) than our batch=1 (`Sty Nove to leiy`) and than the
+Python batch=1 path (`Sty Nove o leiy`); the private page is unaffected. So upstream output depends on batch composition;
+our batch=1 is deterministic. The earlier Phase 1 note "padding only adds trailing blanks" is not generally true for this
+attention-based recognizer. (b) The remaining errors reproduce in an independent reference stack on identical tensors, which
+makes a pipeline cause less likely; it does NOT prove no other issue exists (DB postprocess/contours/unclip and the
+detector-box -> crop quads were not cross-checked: pyclipper/shapely were not installed).
+Verification: clean build 69 tests green; verifyOcrSetup ok; both manifests + print evaluated; installed `~/.local` jar ==
+staged (`35889d79…`); installed-GUI smoke (private Xvfb): page Extract == CLI, Apply Straighten renders normally.
+
+### Next recognizer: research summary (sources via web search; NOTHING downloaded or run)
+Verified: `microsoft/trocr-base-handwritten` / `trocr-small-handwritten` — MIT licence (model card), BEiT encoder + RoBERTa decoder
+fine-tuned on IAM; ONNX conversions exist (Xenova, for Transformers.js; export via Optimum). NOT verified from the sources:
+parameter counts, IAM CER of the Microsoft checkpoints, ONNX file sizes, CPU latency. `PP-OCRv5_server_rec_onnx` (official
+PaddlePaddle HF repo): third-party listings give ~81-84 MB; same pipeline family (drop-in preprocessing, different dictionary);
+handwriting gains NOT verified. docTR/OnnxTR: Apache-2.0 library, mostly printed-document focus; weights' licence not confirmed.
+Recommendation for an isolated evaluation (needs approval before any download): TrOCR small handwritten ONNX, evaluated in the
+disposable venv on the production detector's line crops of the two existing pages, per-case CER/WER. Trade-offs to weigh first:
+autoregressive decoder (latency, tokenizer + generation loop would have to be reimplemented in Java), English/IAM domain, and a
+language-model decoder can silently "repair" or invent words, which conflicts with verbatim names. No promise it fixes `debjoy`.
+Cheaper first step if preferred: PP-OCRv5_server_rec_onnx (same code path). Neither has been downloaded.
