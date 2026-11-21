@@ -1,69 +1,99 @@
-# Handoff (Java migration + OCR setup, 2026-11-20)
+# Handoff (Phase 1 — working image → text OCR, 2026-11-21)
 
-## Completed
-- Archived the React Native/Android tree as tag `archive/android-rn-phase0`
-  (verified resolvable: `7ce7c84`); removed it from the active worktree with
-  `git rm` (no history rewrite, no push). `node_modules` deleted from disk
-  (was untracked/ignored). `.git` and `LICENSE` kept.
-- Preserved: `samples/images/*.png` (5 synthetic pages) and
-  `samples/transcriptions/*.txt` (exact reference texts incl. the blank
-  cells, ambiguity flag, and LaTeX seeds).
-- New Gradle project (root): wrapper 8.14.3, Java 21 toolchain (system
-  default still Java 25), packages `ui` / `ocr` / `model`, non-modular.
-  Pinned deps: ONNX Runtime 1.22.0, JavaFX 21.0.7 (linux classifiers),
-  JUnit Jupiter 5.12.2 (+ platform-launcher 1.12.2 to match Gradle 8.14.3).
-- Models: official `PaddlePaddle/PP-OCRv6_small_{det,rec}_onnx` (Apache-2.0;
-  upstream license in `third-party/PaddleOCR-LICENSE`). PP-OCRv6_small was
-  verifiable, so no fallback model was needed. Files: `det/rec.onnx` +
-  pairing `det/rec.yml` (rec yml embeds the 18,708-entry character dict).
-  Pinned commit SHAs + `main`-ref fallback (host intermittently answers
-  SHA resolves with "Invalid rev id"); bytes pinned by committed
-  `models/checksums.sha256`. Reproducible via `tools/download-models.sh`
-  (rerun-safe, temp-file downloads, retry + pacing).
-- `./gradlew clean build` PASS; `./gradlew verifyOcrSetup` PASS (exit 0,
-  exact I/O in MODEL_MANIFEST.md); missing-assets run FAILS cleanly
-  (exit 1, actionable message). No Python/server/network in the check.
-- JavaFX shell compiles and starts (process alive, toolkit init, no crash);
-  stage mapping unverified — see blockers.
+## Implemented
+- Full pipeline in `ocr/`: EXIF-aware decode → DetResizeForTest(736/min)
+  + ImageNet normalize + CHW → detector inference → DB quad postprocess
+  (border-follow contours, rotating-calipers minAreaRect, box scoring,
+  miter+arc unclip, yml thresholds) → sorted_boxes reading order →
+  perspective crops (bicubic/replicate + rot90 rule) → rec resize/normalize
+  (3×48×W, zero-pad) → recognizer inference → CTC decode → drop_score 0.5.
+- Decode table resolved from upstream evidence to
+  `["blank"] + 18,708 dict + [" "]` (`use_space_char=True` default):
+  class 18709 is the space character, observed firing at word gaps.
+- `OcrService` (sessions opened once, reused across crops/images,
+  AutoCloseable) returning regions (polygon/box/text/det+rec scores),
+  combined text, and per-stage timings.
+- CLI `./gradlew recognizeImage -Pimage=... [-PdebugDir=...]` (exit 0/1/2,
+  headless-safe, no network) + optional debug overlay/crop writer
+  (outside src tree, off by default).
+- JavaFX UI wired to the same service: open/file-picker/preview, background
+  extract, editable transcript + read-only raw, copy, re-extract confirm
+  dialog, mid-job guards, error/empty states.
+- 25 JUnit tests: CTC rules/mapping, dict parsing + full-table layout,
+  minAreaRect/ordering/scaling/warp/unclip geometry, preprocessing math,
+  assembly, error paths. All pass.
 
-## Files added/changed (staged for commit)
-- New: `settings.gradle`, `build.gradle`, `gradle/wrapper/*`, `gradlew*`,
-  `.gitignore`, `src/main/...` (5 classes), `src/test/...` (1 test class),
-  `tools/download-models.sh`, `models/checksums.sha256`,
-  `third-party/PaddleOCR-LICENSE`, `samples/`, `README.md`,
-  `MODEL_MANIFEST.md`, this HANDOFF.
-- Removed from worktree: all RN/Android sources, configs, docs, ios/,
-  android/ (recoverable via the archive tag).
-- Never committed: `models/*.onnx`, `models/*.yml` (git-ignored binaries),
-  `build/`, `.gradle/`, `~/.gradle` caches.
+## Upstream sources (all v3.7.0 tag `b03f4642`)
+- `ppocr/postprocess/db_postprocess.py`, `rec_postprocess.py`,
+  `ppocr/data/imaug/{operators.py,rec_img_aug.py,label_ops.py}`,
+  `tools/infer/{predict_system,predict_det,predict_rec,utility}.py`,
+  `configs/rec/PP-OCRv6/PP-OCRv6_small_rec.yml`, `ppocr/utils/dict/ppocrv6_dict.txt`
+- yml pairing wins over tools-CLI defaults (736/min vs 960/max,
+  thresh 0.2/box 0.45/unclip 1.4/drop 0.5). Documented where they differ.
 
-## Commands actually run
-- `git tag -a archive/android-rn-phase0`; `git rm -r <old tree>`; `rm -rf node_modules android`
-- `gradle wrapper --gradle-version 8.14.3` (from official 8.14.3 dist)
-- `sh tools/download-models.sh` → 4 files, `sha256sum -c` OK
-- `./gradlew clean build` → BUILD SUCCESSFUL
-- `./gradlew verifyOcrSetup` → exit 0 (I/O metadata printed)
-- `java ... OcrSetupCheck` from bare dir → exit 1 with clear error
-- `./gradlew run` → starts, no crash (window mapping pending, see below)
+## Documented deviations (no silent approximations)
+1. EXIF orientation applied (upstream `cv2.imread` ignores it) —
+   deliberate; coordinates refer to the oriented image.
+2. Sequential single-crop inference instead of batching — numerically
+   identical on valid columns; padding only adds trailing blanks.
+3. pyclipper integer quantization not replicated (would need the native
+   lib); double-precision miter + 2°-sampled arcs, error < 0.008px,
+   absorbed by final round+clip except at exact .5 boundaries.
+4. Scanline even-odd fill vs OpenCV fillPoly: possible 1px edge differences.
+5. Contour enumeration is top-left scan order; upstream order only matters
+   past the 3000-contour cap (never hit here).
+6. Out-of-range CTC class raises a clear `OcrException` (upstream would
+   IndexError); unreachable with the corrected 18,710-entry table.
 
-## Tests
-- 3 JUnit tests pass: missing-assets error, checksum-mismatch error,
-  dictionary counting on a synthetic snippet.
-- Not run: on-device-style UI interaction (no mappable display session).
+## Commands and tests run
+- `./gradlew clean build` → SUCCESS (25 tests, 0 failures).
+- `./gradlew verifyOcrSetup` → exit 0 (unchanged Phase 0 gate).
+- `./gradlew recognizeImage` on all 5 samples + rendered English (exit 0).
+- Missing-asset CLI + unsupported-extension paths → exit 1, clear errors.
+- UI driven on a real display via screenshots: open → preview → extract →
+  edit → copy all verified visually; confirm dialog + guards code-reviewed
+  but not interactively triggered (focus gymnastics); clipboard verified
+  with `xclip`.
 
-## Blockers / limits
-1. **UI window unverified.** A display exists (`:0.0`) but the session is
-   screensaver-locked; the app process starts and the FX toolkit inits, but
-   the stage stayed unmapped for 4+ minutes with no errors. Interactive
-   verification is PENDING — retry on an unlocked desktop. (Also fixed
-   along the way: JavaFX classpath launcher needs a separate `Main` class.)
-2. **CDN flakiness.** Hugging Face intermittently 404s pinned-SHA resolves
-   ("Invalid rev id") while `main` works; the script falls back and always
-   enforces SHA-256 bytes. If downloads fail, wait and rerun the script.
-3. OpenCV deliberately absent (no preprocessing in Phase 0).
+## Sample results (verbatim)
+- Rendered print English (900x500, DejaVu Sans): 4/4 regions, all lines
+  character-perfect (`Hello world 123`, `Pack my box 456`,
+  `Quick brown fox -78.5`, `Price: $12.50 total`), det 0.90–0.93,
+  rec 0.95–1.00. Timings: total 769/685ms (decode ~80, detPre ~55,
+  detInfer ~300, detPost ~65, crop ~32, rec ~175), sessions reused.
+- prose.png (synthetic scribbles): 2 regions, pseudo-text ("SOOm", "w").
+- numericals.png: 2 regions, CJK-ish fragments ("と", "m~mv~").
+- table.png: 6 regions, pseudo-Latin cell fragments.
+- equation.png: 0 regions → "(no text recognized)" path works.
+- mixed.png: 7 regions in reading order, pseudo-text.
+- Synthetic outputs are meaningless by design (not handwriting); the
+  mechanics (boxes, order, timings, empty path) are what they verify.
 
-## Next exact task
-Next phase: real image → text OCR — implement DB postprocess + CTC decode
-in `ocr/`, run the two sessions over `samples/images/*.png`, compare with
-`samples/transcriptions/*.txt`. Do NOT claim OCR works until transcribed
-output matches references.
+## UI verification status
+- Verified with screenshots: window renders, model identity shown, Open
+  Image + file chooser + preview work, Extract fills transcript AND raw
+  identically, buttons enable/disable correctly, typing edits transcript
+  while raw stays pristine, Copy places the edited transcript on the
+  clipboard (`xclip` confirmed), status messages accurate.
+- Re-extract confirmation dialog + duplicate/mid-job guards: implemented,
+  code-reviewed, NOT interactively triggered (xdotool focus limits).
+- No production signing; debug APK/standalone-installer distinction N/A
+  (desktop app, runs from Gradle; no installer built).
+
+## Remaining issues
+1. Real handwriting accuracy UNVERIFIED — no handwriting samples exist;
+   next phase should add some and compare against references.
+2. Reading order follows upstream `sorted_boxes` on quad point 0; on
+   strongly rotated quads the displayed `box` y0 can differ from the sort
+   key — same as upstream, by design.
+3. CPU-only, sequential; no performance optimization attempted.
+
+## Next task (Phase 2)
+Image review + numericals: region review UI with source-image context,
+per-region correction, and worked-calculation transcription using the
+`samples/transcriptions/*.txt` references. Do NOT claim handwriting
+accuracy until measured on real handwriting.
+
+## Commit
+Phase 1 commit on `main` (see `git log`). Models stay git-ignored;
+no push.

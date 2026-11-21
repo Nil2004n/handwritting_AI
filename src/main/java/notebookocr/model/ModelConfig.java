@@ -121,6 +121,56 @@ public final class ModelConfig {
     }
 
     /**
+     * Reads the recognizer `character_dict` as an ordered list.
+     * These are CTC output classes 1..N (`ModelConfig.readDecodeTable`
+     * adds the blank class at 0 and the space class at the end).
+     */
+    public static java.util.List<String> readRecDictionary(Path recYml) throws IOException {
+        List<String> lines = Files.readAllLines(recYml, StandardCharsets.UTF_8);
+        List<String> dict = new ArrayList<>();
+        boolean inDict = false;
+        for (String line : lines) {
+            if (!inDict) {
+                if (line.trim().equals("character_dict:")) {
+                    inDict = true;
+                }
+                continue;
+            }
+            if (line.startsWith("  - ")) {
+                dict.add(unquoteYmlScalar(line.substring(4)));
+            } else if (!line.startsWith(" ") && !line.trim().isEmpty() && !line.startsWith("#")) {
+                break;
+            }
+        }
+        return dict;
+    }
+
+    /**
+     * Builds the exact inference decode table, mirroring upstream
+     * {@code CTCLabelDecode} with the tools/pipeline default
+     * {@code use_space_char=True}: {@code ["blank"] + dict + [" "]}.
+     * The recognizer's 18,710 output classes are then fully addressed:
+     * class 0 is blank (ignored), 1..18708 are the dictionary, and 18709
+     * is the space the model emits between words.
+     */
+    public static java.util.List<String> readDecodeTable(Path recYml) throws IOException {
+        java.util.List<String> table = new java.util.ArrayList<>();
+        table.add("blank");
+        table.addAll(readRecDictionary(recYml));
+        table.add(" ");
+        return java.util.Collections.unmodifiableList(table);
+    }
+
+    /** Unquotes a YAML single-quoted scalar ('' is an escaped quote). */
+    static String unquoteYmlScalar(String raw) {
+        String s = raw.trim();
+        if (s.length() >= 2 && s.charAt(0) == '\'' && s.charAt(s.length() - 1) == '\'') {
+            return s.substring(1, s.length() - 1).replace("''", "'");
+        }
+        return s;
+    }
+
+    /**
      * Counts entries under the {@code character_dict:} key of the recognizer
      * pairing config, proving the decode dictionary is present and readable.
      * Returns the number of dictionary entries found (0 when the key is absent).

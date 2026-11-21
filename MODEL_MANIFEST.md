@@ -49,12 +49,24 @@ the model repos.
   - recognizer: input `x` shape=[-1, 3, 48, -1] type=FLOAT (matches the
     `RecResizeImg` 3x48x320 pipeline config);
     output `fetch_name_0` shape=[-1, -1, 18710] type=FLOAT
-    (18,708 dict entries + control classes)
   All native resources closed after the check; failure paths (missing
   files, bad checksums) exit 1 with actionable messages, covered by unit
   tests and by a direct missing-assets run.
-- UNTESTED: actual image decoding, detection postprocess (DB unclip/boxes),
-  CTC greedy decoding, and end-to-end text output. Successful session
-  loading is NOT proof of working OCR — that is the next phase.
-- No OpenCV: Phase 0 performs no image preprocessing, so none is bundled.
+- VERIFIED (Phase 1, 2026-11-21): full decode table is
+  `["blank"] + 18,708 dict entries + [" "]` = 18,710 classes, matching the
+  upstream `use_space_char=True` inference default. The extra class is the
+  space character (index 18709), confirmed firing at inter-word gaps with
+  ~1.0 confidence on rendered English text — not an unknown token.
+- VERIFIED (Phase 1): end-to-end OCR on rendered print English is
+  character-perfect (see HANDOFF.md); synthetic scribble samples produce
+  well-formed regions but meaningless text, as expected (they are not
+  handwriting). Real handwriting accuracy is UNTESTED.
+- Processing rules implemented from upstream v3.7.0 sources
+  (tag `b03f4642`): DetResizeForTest 736/min + round-to-32, ImageNet
+  normalize, DB postprocess (thresh 0.2, box 0.45, unclip 1.4, quad,
+  fast scoring), getRotateCropImage (INTER_CUBIC, replicate, rot90>=1.5),
+  resize_norm_img 3x48xW, CTC greedy decode, drop_score 0.5, sorted_boxes
+  reading order. See HANDOFF.md for the deviation list.
+- No OpenCV: geometry (contour tracing, minAreaRect, warp, unclip) is
+  hand-ported pure Java; no OpenCV or polygon-offset dependency added.
 - No PaddlePaddle Java SDK methods are used; only ORT Java session APIs.

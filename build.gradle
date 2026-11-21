@@ -30,6 +30,9 @@ dependencies {
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.12.2'
     // Align with jupiter 5.12.2 (Gradle's bundled launcher is newer and breaks discovery).
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+    // JPEG EXIF orientation (Apache-2.0). Upstream cv2.imread ignores EXIF;
+    // we apply it deliberately so phone photos work (documented in HANDOFF).
+    implementation 'com.drewnoakes:metadata-extractor:2.19.0'
 }
 
 application {
@@ -46,4 +49,18 @@ tasks.register('verifyOcrSetup', JavaExec) {
     description = 'Loads detector/recognizer ONNX sessions and prints their I/O metadata.'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'notebookocr.ocr.OcrSetupCheck'
+}
+
+// Phase 1: end-to-end text extraction over one image file.
+tasks.register('recognizeImage', JavaExec) {
+    group = 'verification'
+    description = 'Runs detector + recognizer over -Pimage=/path/to.jpg (optional -PdebugDir=/tmp/ocr-debug).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookocr.ocr.RecognizeCli'
+    if (project.hasProperty('image')) {
+        args project.property('image')
+    }
+    if (project.hasProperty('debugDir')) {
+        args '--debug-dir', project.property('debugDir')
+    }
 }
