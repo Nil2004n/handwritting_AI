@@ -1,0 +1,5 @@
+# notebook-ai accuracy cases (TSV): image<TAB>rotate-cw-steps<TAB>straighten-deg<TAB>expected (\n = newline).
+# Paths are repo-root-relative unless absolute. Only cases with real human
+# ground truth belong here. Synthetic scribbles have no OCR ground truth
+# and are covered by structural tests instead.
+samples/handwriting-test.jpg	0		This is how it's done\nLIFE ITSELF IS COMPLICATED\nMy Name is Debjoy.

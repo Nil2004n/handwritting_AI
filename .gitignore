@@ -6,3 +6,8 @@ models/*.onnx
 models/*.yml
 # Local overrides.
 local.properties
+
+# Private local evaluation cases (personal images + transcriptions).
+# The committed manifest is eval/cases.tsv; put private cases in
+# eval-local/cases.tsv (same format, never committed).
+eval-local/

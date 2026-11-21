@@ -152,3 +152,17 @@ tasks.register('recognizeImage', JavaExec) {
         args '--rec-only' // diagnostics: recognizer only, image is a pre-cropped line
     }
 }
+
+// Phase 3: reproducible accuracy evaluation over a manifest of cases.
+tasks.register('evaluate', JavaExec) {
+    group = 'verification'
+    description = 'Runs CER/WER evaluation: -PevalManifest=eval/cases.tsv [--debugDir=...].'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookai.eval.Evaluate'
+    if (project.hasProperty('evalManifest')) {
+        args '--manifest', project.property('evalManifest')
+    }
+    if (project.hasProperty('debugDir')) {
+        args '--debug-dir', project.property('debugDir')
+    }
+}
