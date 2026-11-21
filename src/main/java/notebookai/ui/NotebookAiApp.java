@@ -1,10 +1,13 @@
 package notebookai.ui;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import javafx.application.Application;
@@ -15,18 +18,28 @@ import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.Menu;
+import javafx.scene.control.MenuBar;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyCodeCombination;
+import javafx.scene.input.KeyCombination;
 import javafx.scene.input.MouseEvent;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -38,6 +51,16 @@ import notebookai.model.ControlState;
 import notebookai.model.ModelConfig;
 import notebookai.model.OcrResult;
 import notebookai.model.WorkingImage;
+import notebookai.ocr.ImageOps;
+import notebookai.project.JobTicket;
+import notebookai.project.PageData;
+import notebookai.project.ProjectActions;
+import notebookai.project.ProjectData;
+import notebookai.project.ProjectException;
+import notebookai.project.ProjectSession;
+import notebookai.project.ProjectStore;
+import notebookai.project.RegionData;
+import notebookai.project.TextExport;
 import notebookai.ocr.CtcDecoder;
 import notebookai.ocr.OcrException;
 import notebookai.ocr.OcrService;
@@ -95,31 +118,54 @@ public class NotebookAiApp extends Application {
     private Button applyCropButton;
     private Button clearSelectionButton;
 
+    // ---- active page runtime state (only the ACTIVE page is decoded; the rest live in PageData) ----
     private WorkingImage working;
     private WorkingImage.Rendered rendered;
     private List<OcrResult.TextRegion> regions = new ArrayList<>();
     private int selectedRegion = -1;
-    private int[] selection;
-    private int[] cropDraft;
-    private String selectionText = "";
-    private String lastRawText = "";
+    private int[] selection;     // transient: never persisted, never dirties the project
+    private int[] cropDraft;     // transient
+    private String selectionText = ""; // transient review result
     private String lastIdentity = "Model: " + ModelConfig.MODEL_IDENTITY;
     private OcrService sharedService;
 
+    // ---- project state ----
+    private final ProjectSession session = new ProjectSession();
+    private String activePageId;
+    private final Map<String, Image> thumbs = new HashMap<>();
+    private Stage stage;
+    private Label projectLabel;
+    private ListView<PageData> pageList;
+    private Button removePageButton;
+    private Button moveUpButton;
+    private Button moveDownButton;
+    private MenuItem miNew;
+    private MenuItem miOpen;
+    private MenuItem miSave;
+    private MenuItem miSaveAs;
+    private MenuItem miExportCurrent;
+    private MenuItem miExportAll;
+    private boolean suppressPageSelection;
+    private boolean loadingPage; // programmatic UI refresh: must not count as an edit
+
     private int jobGen;
-    private boolean jobRunning;
-    private boolean userEdited;
+    private boolean jobRunning; // OCR job, import or project open in flight (locks page/project actions)
+    private boolean saving;
+    private boolean closing;
 
     @Override
     public void start(Stage stage) {
+        this.stage = stage;
         Label title = new Label("notebook-ai");
         title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
         identityLabel = new Label(lastIdentity);
         identityLabel.setWrapText(true);
-        statusLabel = new Label("Open an image (JPG or PNG) to begin.");
+        statusLabel = new Label("Add images (JPG or PNG) as pages to begin.");
+        projectLabel = new Label();
+        projectLabel.setStyle("-fx-font-weight: bold;");
 
-        openButton = new Button("Open Image…");
-        openButton.setOnAction(e -> openImage(stage));
+        openButton = new Button("Add Images…");
+        openButton.setOnAction(e -> addImages());
         extractButton = new Button("Extract Page");
         extractButton.setDisable(true);
         extractButton.setOnAction(e -> extractPage());
@@ -208,7 +254,30 @@ public class NotebookAiApp extends Application {
                 new Label("Recognizer crop:"), cropThumb,
                 new HBox(10, copyRegionButton, insertRegionButton));
         reviewBox.setPrefWidth(380);
-        HBox middle = new HBox(12, previewPane, reviewBox);
+        pageList = new ListView<>();
+        pageList.setPrefWidth(210);
+        pageList.setMinWidth(210);
+        pageList.setPrefHeight(FIT_H);
+        pageList.setCellFactory(lv -> new PageCell());
+        pageList.getSelectionModel().selectedItemProperty().addListener((obs, o, v) -> {
+            if (!suppressPageSelection && v != null && !v.id().equals(activePageId)) {
+                if (jobRunning) {
+                    refreshPageList(); // locked mid-job: snap back to the active page
+                } else {
+                    activatePage(v.id());
+                }
+            }
+        });
+        removePageButton = new Button("Remove");
+        removePageButton.setOnAction(e -> removeActivePage());
+        moveUpButton = new Button("\u25B2");
+        moveUpButton.setOnAction(e -> moveActivePage(-1));
+        moveDownButton = new Button("\u25BC");
+        moveDownButton.setOnAction(e -> moveActivePage(1));
+        VBox pagePane = new VBox(6, new Label("Pages:"), pageList,
+                new HBox(6, removePageButton, moveUpButton, moveDownButton));
+        pagePane.setPrefWidth(210);
+        HBox middle = new HBox(12, pagePane, previewPane, reviewBox);
 
         selectionKind = new Label("Selection: none (drag on the preview, or enable Crop mode).");
         selectionOutput = new TextArea();
@@ -229,7 +298,14 @@ public class NotebookAiApp extends Application {
         transcript.setWrapText(true);
         transcript.setPrefRowCount(6);
         transcript.textProperty().addListener((obs, old, val) -> {
-            userEdited = true;
+            if (loadingPage) {
+                return; // programmatic refresh (page switch, OCR result): not an edit
+            }
+            PageData page = currentPage();
+            if (page != null && !val.equals(page.editedText())) {
+                page.setEditedText(val); // the reviewed transcript lives in the page, raw OCR stays separate
+                session.markModified();
+            }
             updateControls();
         });
 
@@ -239,117 +315,742 @@ public class NotebookAiApp extends Application {
         rawOutput.setWrapText(true);
         rawOutput.setPrefRowCount(4);
 
-        VBox root = new VBox(8, title, identityLabel, statusLabel, runRow, prepRow, editRow,
+        VBox root = new VBox(8, title, projectLabel, identityLabel, statusLabel, runRow, prepRow, editRow,
                 middle, selectionKind, selectionOutput, selectionTiming, selRow,
                 transcriptLabel, transcript, rawLabel, rawOutput);
         root.setPadding(new Insets(12));
         VBox.setVgrow(transcript, Priority.ALWAYS);
 
-        stage.setTitle("notebook-ai");
         transcript.setMinHeight(110);
         rawOutput.setMinHeight(80);
         ScrollPane scroll = new ScrollPane(root);
         scroll.setFitToWidth(true);
-        stage.setScene(new Scene(scroll, 1000, 880));
+        BorderPane frame = new BorderPane();
+        frame.setTop(buildMenuBar());
+        frame.setCenter(scroll);
+        stage.setScene(new Scene(frame, 1290, 900));
+        stage.setOnCloseRequest(ev -> {
+            if (closing) {
+                return;
+            }
+            ev.consume();
+            if (saving) {
+                statusLabel.setText("A save is in progress; wait for it to finish, then close.");
+                return;
+            }
+            confirmUnsavedThen(() -> {
+                closing = true;
+                stage.close();
+            });
+        });
         stage.show();
+        refreshPageList();
         updateControls();
     }
 
+    private MenuBar buildMenuBar() {
+        miNew = new MenuItem("New Project");
+        miNew.setAccelerator(new KeyCodeCombination(KeyCode.N, KeyCombination.CONTROL_DOWN));
+        miNew.setOnAction(e -> newProject());
+        miOpen = new MenuItem("Open Project…");
+        miOpen.setAccelerator(new KeyCodeCombination(KeyCode.O, KeyCombination.CONTROL_DOWN));
+        miOpen.setOnAction(e -> openProject());
+        miSave = new MenuItem("Save");
+        miSave.setAccelerator(new KeyCodeCombination(KeyCode.S, KeyCombination.CONTROL_DOWN));
+        miSave.setOnAction(e -> saveProject(false, null));
+        miSaveAs = new MenuItem("Save As…");
+        miSaveAs.setAccelerator(new KeyCodeCombination(KeyCode.S, KeyCombination.CONTROL_DOWN, KeyCombination.SHIFT_DOWN));
+        miSaveAs.setOnAction(e -> saveProject(true, null));
+        MenuItem quit = new MenuItem("Quit");
+        quit.setOnAction(e -> stage.fireEvent(new javafx.stage.WindowEvent(stage,
+                javafx.stage.WindowEvent.WINDOW_CLOSE_REQUEST)));
+        Menu project = new Menu("Project");
+        project.getItems().addAll(miNew, miOpen, new SeparatorMenuItem(), miSave, miSaveAs,
+                new SeparatorMenuItem(), quit);
+        miExportCurrent = new MenuItem("Current Page as Text…");
+        miExportCurrent.setOnAction(e -> exportCurrent());
+        miExportAll = new MenuItem("All Pages as Text…");
+        miExportAll.setOnAction(e -> exportAll());
+        Menu export = new Menu("Export");
+        export.getItems().addAll(miExportCurrent, miExportAll);
+        return new MenuBar(project, export);
+    }
+
     // ------------------------------------------------------------------
-    // Image + preparation.
+    // Project, pages, image preparation.
     // ------------------------------------------------------------------
 
-    private void openImage(Stage stage) {
+    private PageData currentPage() {
+        return activePageId == null ? null : session.project().find(activePageId);
+    }
+
+    /** A meaningful change that becomes project content: marks the project unsaved. */
+    private void modified() {
+        session.markModified();
+        updateControls();
+    }
+
+    private boolean pageHasEdits() {
+        PageData p = currentPage();
+        return p != null && p.hasUserEdits() && !p.editedText().isEmpty();
+    }
+
+    private static String rawDisplay(PageData p) {
+        if (!p.recognized()) {
+            return "";
+        }
+        return p.rawText().isEmpty() ? "(no text recognized)" : p.rawText();
+    }
+
+    private static String pageStatus(PageData p) {
+        if (!p.recognized()) {
+            return p.editedText().isEmpty() ? "not recognized" : "not recognized (has typed text)";
+        }
+        if (p.rawText().isEmpty() && p.editedText().isEmpty()) {
+            return "recognized: no text";
+        }
+        return p.hasUserEdits() ? "recognized, edited" : "recognized";
+    }
+
+    private static String cleanName(String raw) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : raw.toCharArray()) {
+            if (c >= 0x20 && c != 0x7f && c != '/' && c != '\\') {
+                sb.append(c);
+            }
+        }
+        String n = sb.toString().strip();
+        if (n.length() > ProjectStore.MAX_NAME_CHARS) {
+            n = n.substring(0, ProjectStore.MAX_NAME_CHARS);
+        }
+        return n.isEmpty() ? "image" : n;
+    }
+
+    private static List<OcrResult.TextRegion> toTextRegions(List<RegionData> data) {
+        List<OcrResult.TextRegion> out = new ArrayList<>();
+        for (RegionData r : data) {
+            out.add(new OcrResult.TextRegion(r.polygon(), r.box(), r.text(), r.detScore(), r.recScore()));
+        }
+        return out;
+    }
+
+    private static List<RegionData> toRegionData(List<OcrResult.TextRegion> regs) {
+        List<RegionData> out = new ArrayList<>();
+        for (OcrResult.TextRegion r : regs) {
+            out.add(new RegionData(r.polygon(), r.box(), r.text(), r.detScore(), r.recScore()));
+        }
+        return out;
+    }
+
+    /** Small thumbnail from decoded BGR pixels (background-thread safe). */
+    private static Image thumbnail(byte[] bgr, int w, int h) {
+        double scale = Math.min(88.0 / w, 112.0 / h);
+        int tw = Math.max(1, (int) Math.round(w * scale));
+        int th = Math.max(1, (int) Math.round(h * scale));
+        return toFxImage(ImageOps.resizeBilinear(bgr, w, h, tw, th), tw, th);
+    }
+
+    /** Builds the working image for a page: original bytes + saved prep, in the exact order the UI applies it. */
+    private static WorkingImage buildWorking(PageData page) throws Exception {
+        ImageOps.DecodedImage d = ImageOps.decode(page.original());
+        WorkingImage w = new WorkingImage(d.bgr(), d.width(), d.height());
+        w.rotateSteps(page.quarterTurnsCw());
+        if (page.fineDegrees() != 0) {
+            w.setStraighten(page.fineDegrees());
+        }
+        int[] crop = page.crop();
+        if (crop != null) {
+            w.setCrop(crop);
+        }
+        return w;
+    }
+
+    private void refreshPageList() {
+        suppressPageSelection = true;
+        try {
+            pageList.getItems().setAll(session.project().pages());
+            int idx = activePageId == null ? -1 : session.project().indexOf(activePageId);
+            if (idx >= 0) {
+                pageList.getSelectionModel().select(idx);
+            } else {
+                pageList.getSelectionModel().clearSelection();
+            }
+        } finally {
+            suppressPageSelection = false;
+        }
+        pageList.refresh();
+    }
+
+    /** Page cell: thumbnail, "N. name" and recognition status. */
+    private final class PageCell extends ListCell<PageData> {
+        private final ImageView iv = new ImageView();
+        private final Label name = new Label();
+        private final Label state = new Label();
+        private final HBox box;
+
+        PageCell() {
+            iv.setPreserveRatio(true);
+            iv.setFitWidth(44);
+            iv.setFitHeight(56);
+            state.setStyle("-fx-font-size: 10px; -fx-text-fill: #555;");
+            name.setMaxWidth(130);
+            box = new HBox(6, iv, new VBox(2, name, state));
+        }
+
+        @Override
+        protected void updateItem(PageData item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setGraphic(null);
+                setText(null);
+                return;
+            }
+            iv.setImage(thumbs.get(item.id()));
+            name.setText((getIndex() + 1) + ". " + item.name());
+            state.setText(pageStatus(item));
+            setGraphic(box);
+        }
+    }
+
+    // ---- activating / deactivating the displayed page ----
+
+    private void activatePage(String id) {
+        PageData page = session.project().find(id);
+        if (page == null) {
+            deactivatePage();
+            return;
+        }
+        WorkingImage w;
+        try {
+            w = buildWorking(page);
+        } catch (Exception e) {
+            statusLabel.setText("Could not load page \"" + page.name() + "\": " + e.getMessage());
+            refreshPageList();
+            return;
+        }
+        activePageId = id;
+        working = w;
+        loadingPage = true;
+        try {
+            straightenSlider.setValue(page.fineDegrees());
+            cropMode.setSelected(false);
+            clearTransientUi();
+            transcript.setText(page.editedText());
+            rawOutput.setText(rawDisplay(page));
+            regions = toTextRegions(page.regions());
+            refreshRegionList();
+            refreshPreview();
+        } finally {
+            loadingPage = false;
+        }
+        statusLabel.setText(page.loadNotice() != null
+                ? "Page " + (session.project().indexOf(id) + 1) + ": " + page.loadNotice()
+                : "Page " + (session.project().indexOf(id) + 1) + ": " + page.name() + " (" + pageStatus(page) + ")");
+        refreshPageList();
+        updateControls();
+    }
+
+    private void deactivatePage() {
+        activePageId = null;
+        working = null;
+        rendered = null;
+        loadingPage = true;
+        try {
+            clearResults();
+            preview.setImage(null);
+            drawOverlay(null);
+        } finally {
+            loadingPage = false;
+        }
+        refreshPageList();
+        updateControls();
+    }
+
+    /** Clears selection/crop-draft/review state: transient, never persisted, never an edit. */
+    private void clearTransientUi() {
+        selection = null;
+        cropDraft = null;
+        selectedRegion = -1;
+        selectionText = "";
+        regionList.getItems().clear();
+        regionRaw.clear();
+        regionScores.setText("No region selected.");
+        cropThumb.setImage(null);
+        selectionOutput.clear();
+        selectionKind.setText("Selection: none (drag on the preview, or enable Crop mode).");
+        selectionTiming.setText("");
+    }
+
+    // ---- adding pages ----
+
+    private record Imported(PageData page, Image thumb) {}
+
+    private record ImportResult(List<Imported> pages, List<String> errors) {}
+
+    private void addImages() {
         if (jobRunning) {
             return;
         }
+        int room = ProjectStore.MAX_PAGES - session.project().size();
+        if (room <= 0) {
+            statusLabel.setText("A project holds at most " + ProjectStore.MAX_PAGES + " pages.");
+            return;
+        }
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Open Source Image");
+        chooser.setTitle("Add Images as Pages (JPG or PNG)");
         chooser.getExtensionFilters().addAll(
                 new FileChooser.ExtensionFilter("Images (JPG, PNG)", "*.jpg", "*.jpeg", "*.png"),
                 new FileChooser.ExtensionFilter("JPEG", "*.jpg", "*.jpeg"),
                 new FileChooser.ExtensionFilter("PNG", "*.png"));
-        File file = chooser.showOpenDialog(stage);
-        if (file == null) {
+        List<File> files = chooser.showOpenMultipleDialog(stage);
+        if (files == null || files.isEmpty()) {
             return;
         }
-        if (userEdited && !transcript.getText().isEmpty() && !confirmDiscard()) {
-            return;
-        }
-        try {
-            notebookai.ocr.ImageOps.DecodedImage decoded =
-                    notebookai.ocr.ImageOps.decode(file.toPath());
-            working = new WorkingImage(decoded.bgr(), decoded.width(), decoded.height());
-        } catch (Exception e) {
-            statusLabel.setText("Could not open image: " + e.getMessage());
-            return;
-        }
-        straightenSlider.setValue(0);
-        cropMode.setSelected(false);
-        clearResults();
-        userEdited = false;
-        refreshPreview();
-        statusLabel.setText("Image loaded: " + file.getName());
-        updateControls();
+        List<File> take = files.size() > room ? new ArrayList<>(files.subList(0, room)) : files;
+        String limitNote = files.size() > room
+                ? " Only " + room + " more page(s) fit (limit " + ProjectStore.MAX_PAGES + ")."
+                : "";
+        runTask("Importing " + take.size() + " image(s)…", () -> importFiles(take), result -> {
+            for (Imported im : result.pages()) {
+                session.project().add(im.page());
+                thumbs.put(im.page().id(), im.thumb());
+            }
+            if (!result.pages().isEmpty()) {
+                modified();
+                activatePage(result.pages().get(0).page().id());
+            } else {
+                refreshPageList();
+            }
+            statusLabel.setText("Added " + result.pages().size() + " page(s)"
+                    + (result.errors().isEmpty() ? "." : "; " + result.errors().size() + " file(s) skipped.")
+                    + limitNote);
+            if (!result.errors().isEmpty()) {
+                Alert warn = new Alert(Alert.AlertType.WARNING);
+                warn.setTitle("Some images were not added");
+                warn.setHeaderText(result.errors().size() + " file(s) could not be added as pages.");
+                warn.setContentText(String.join("\n", result.errors()));
+                warn.showAndWait();
+            }
+        });
     }
 
-    private void mutateWorking(String what, Runnable mutation) {
-        if (working == null || jobRunning) {
+    private ImportResult importFiles(List<File> files) {
+        List<Imported> ok = new ArrayList<>();
+        List<String> errs = new ArrayList<>();
+        for (File f : files) {
+            String name = cleanName(f.getName());
+            try {
+                long size = Files.size(f.toPath());
+                if (size > ProjectStore.MAX_IMAGE_BYTES) {
+                    errs.add(name + ": larger than " + (ProjectStore.MAX_IMAGE_BYTES >> 20) + " MiB");
+                    continue;
+                }
+                byte[] data = Files.readAllBytes(f.toPath());
+                if (PageData.detectFormat(data) == null) {
+                    errs.add(name + ": not a JPEG or PNG image");
+                    continue;
+                }
+                int[] dim = ImageOps.peekDimensions(data);
+                if (dim == null || (long) dim[0] * dim[1] > ProjectStore.MAX_PIXELS) {
+                    errs.add(name + ": unreadable or larger than " + (ProjectStore.MAX_PIXELS / 1_000_000) + " megapixels");
+                    continue;
+                }
+                ImageOps.DecodedImage d = ImageOps.decode(data);
+                ok.add(new Imported(PageData.create(name, data), thumbnail(d.bgr(), d.width(), d.height())));
+            } catch (java.nio.file.NoSuchFileException e) {
+                errs.add(name + ": file not found");
+            } catch (java.nio.file.AccessDeniedException e) {
+                errs.add(name + ": permission denied");
+            } catch (Exception e) {
+                errs.add(name + ": " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+            }
+        }
+        return new ImportResult(ok, errs);
+    }
+
+    // ---- removing / reordering ----
+
+    private void removeActivePage() {
+        PageData page = currentPage();
+        if (page == null || jobRunning) {
             return;
         }
-        if (userEdited && !transcript.getText().isEmpty() && !confirmDiscard()) {
+        int idx = session.project().indexOf(page.id());
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle("Remove page?");
+        confirm.setHeaderText("Remove page " + (idx + 1) + " (" + page.name() + ") from the project?");
+        confirm.setContentText("Its image, transcript and results are removed from the project (the original image file "
+                + "on disk is not touched). This is part of the unsaved changes until you save.");
+        Optional<ButtonType> choice = confirm.showAndWait();
+        if (choice.isEmpty() || choice.get() != ButtonType.OK) {
+            return;
+        }
+        session.project().remove(page.id());
+        thumbs.remove(page.id());
+        modified();
+        int n = session.project().size();
+        if (n == 0) {
+            deactivatePage();
+        } else {
+            activatePage(session.project().pages().get(Math.min(idx, n - 1)).id());
+        }
+        statusLabel.setText("Page removed.");
+    }
+
+    private void moveActivePage(int delta) {
+        PageData page = currentPage();
+        if (page == null || jobRunning) {
+            return;
+        }
+        if (session.project().move(page.id(), delta)) {
+            refreshPageList();
+            modified();
+            statusLabel.setText("Page moved to position " + (session.project().indexOf(page.id()) + 1) + ".");
+        }
+    }
+
+    // ---- image preparation (per page) ----
+
+    private void mutateWorking(String what, Runnable mutation) {
+        PageData page = currentPage();
+        if (page == null || working == null || jobRunning) {
+            return;
+        }
+        if (pageHasEdits() && !confirmDiscard()) {
             return;
         }
         boolean hadCrop = working.hasCrop();
+        String before = page.prepKey();
+        boolean hadState = page.recognized() || !page.editedText().isEmpty();
         mutation.run();
-        clearResults();
-        userEdited = false;
+        applyPrepToPage(page);
+        loadingPage = true;
+        try {
+            clearResults();
+        } finally {
+            loadingPage = false;
+        }
         refreshPreview();
+        refreshActiveThumbnail();
+        if (!before.equals(page.prepKey()) || hadState) {
+            modified();
+        }
         statusLabel.setText("Working image updated (" + what + "). Previous results cleared."
                 + (hadCrop && !working.hasCrop() ? " Crop cleared (it applied to the previous orientation)." : ""));
+    }
+
+    /** Copies the working image's prep state into the page and returns it to "not recognized". */
+    private void applyPrepToPage(PageData page) {
+        page.setPrep(working.quarterTurnsCw(), working.fineDegrees(), working.crop());
+        page.clearRecognition();
+    }
+
+    private void refreshActiveThumbnail() {
+        PageData page = currentPage();
+        if (page != null && rendered != null) {
+            thumbs.put(page.id(), thumbnail(rendered.bgr(), rendered.width(), rendered.height()));
+            pageList.refresh();
+        }
     }
 
     private boolean confirmDiscard() {
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
         confirm.setTitle("Discard edits?");
-        confirm.setHeaderText("Unsaved transcript edits exist.");
+        confirm.setHeaderText("This page has transcript edits.");
         confirm.setContentText("Continue and replace them?");
         Optional<ButtonType> choice = confirm.showAndWait();
         return choice.isPresent() && choice.get() == ButtonType.OK;
     }
 
     private void applyCrop() {
-        if (working == null || jobRunning || cropDraft == null) {
+        PageData page = currentPage();
+        if (page == null || working == null || jobRunning || cropDraft == null) {
             return;
         }
-        if (userEdited && !transcript.getText().isEmpty() && !confirmDiscard()) {
+        if (pageHasEdits() && !confirmDiscard()) {
             return;
         }
         working.setCrop(cropDraft);
         cropDraft = null;
-        clearResults();
-        userEdited = false;
+        applyPrepToPage(page);
+        loadingPage = true;
+        try {
+            clearResults();
+        } finally {
+            loadingPage = false;
+        }
         refreshPreview();
+        refreshActiveThumbnail();
+        modified();
         statusLabel.setText("Crop applied. Previous results cleared.");
     }
 
+    /** Clears all result displays (callers set loadingPage so this is never mistaken for an edit). */
     private void clearResults() {
         regions = new ArrayList<>();
-        selectedRegion = -1;
-        selection = null;
-        cropDraft = null;
-        selectionText = "";
-        lastRawText = "";
-        regionList.getItems().clear();
-        regionRaw.clear();
-        regionScores.setText("No region selected.");
-        cropThumb.setImage(null);
+        clearTransientUi();
         transcript.clear();
         rawOutput.clear();
-        selectionOutput.clear();
-        selectionKind.setText("Selection: none (drag on the preview, or enable Crop mode).");
-        selectionTiming.setText("");
         updateControls();
+    }
+
+    // ---- project actions: new / open / save / close ----
+
+    private void confirmUnsavedThen(Runnable proceed) {
+        if (!session.isDirty()) {
+            proceed.run();
+            return;
+        }
+        ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.YES);
+        ButtonType discard = new ButtonType("Discard", ButtonBar.ButtonData.NO);
+        ButtonType cancel = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        Alert a = new Alert(Alert.AlertType.CONFIRMATION, "", save, discard, cancel);
+        a.setTitle("Unsaved changes");
+        a.setHeaderText("This project has unsaved changes.");
+        a.setContentText("Save them first, discard them, or cancel and keep working?");
+        Optional<ButtonType> r = a.showAndWait();
+        if (r.isEmpty() || r.get() == cancel) {
+            return;
+        }
+        if (r.get() == discard) {
+            proceed.run();
+            return;
+        }
+        saveProject(false, proceed); // proceeds only if the save succeeds
+    }
+
+    private void newProject() {
+        if (jobRunning || saving) {
+            return;
+        }
+        confirmUnsavedThen(() -> {
+            session.newProject();
+            thumbs.clear();
+            deactivatePage();
+            statusLabel.setText("New project.");
+            updateControls();
+        });
+    }
+
+    private void openProject() {
+        if (jobRunning || saving) {
+            return;
+        }
+        confirmUnsavedThen(this::chooseAndOpenProject);
+    }
+
+    private void chooseAndOpenProject() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Open Project");
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("notebook-ai projects (*" + ProjectStore.EXTENSION + ")", "*" + ProjectStore.EXTENSION));
+        File f = chooser.showOpenDialog(stage);
+        if (f == null) {
+            return;
+        }
+        java.nio.file.Path path = f.toPath();
+        // Load fully on a background thread; the active project is replaced only if this succeeds.
+        runTask("Opening project…", () -> ProjectStore.load(path), loaded -> {
+            session.adopt(loaded, path);
+            thumbs.clear();
+            activePageId = null;
+            if (loaded.size() > 0) {
+                activatePage(loaded.pages().get(0).id());
+            } else {
+                deactivatePage();
+            }
+            startThumbnailLoader();
+            statusLabel.setText("Opened " + path.getFileName() + " (" + loaded.size() + " page(s)).");
+            updateControls();
+        });
+    }
+
+    /** Generates thumbnails for a freshly opened project one page at a time (never all pages decoded at once). */
+    private void startThumbnailLoader() {
+        long epoch = session.epoch();
+        List<PageData> snapshot = new ArrayList<>(session.project().pages());
+        Thread t = new Thread(() -> {
+            for (PageData p : snapshot) {
+                try {
+                    WorkingImage w = buildWorking(p);
+                    WorkingImage.Rendered r = w.render();
+                    Image img = thumbnail(r.bgr(), r.width(), r.height());
+                    Platform.runLater(() -> {
+                        if (session.epoch() == epoch) {
+                            thumbs.put(p.id(), img);
+                            pageList.refresh();
+                        }
+                    });
+                } catch (Exception ignored) {
+                    // A page that cannot render simply keeps a blank thumbnail; activating it reports the error.
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private java.nio.file.Path chooseSaveFile() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Save Project As");
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("notebook-ai projects (*" + ProjectStore.EXTENSION + ")", "*" + ProjectStore.EXTENSION));
+        chooser.setInitialFileName(session.path() == null ? "Untitled" + ProjectStore.EXTENSION
+                : session.path().getFileName().toString());
+        File f = chooser.showSaveDialog(stage);
+        if (f == null) {
+            return null;
+        }
+        java.nio.file.Path p = f.toPath();
+        if (!p.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(ProjectStore.EXTENSION)) {
+            p = p.resolveSibling(p.getFileName() + ProjectStore.EXTENSION);
+        }
+        return p;
+    }
+
+    /**
+     * Saves (or Save As). A consistent snapshot is taken on the UI thread and written on a worker;
+     * only the snapshot's revision is marked saved, so edits made during the save stay unsaved.
+     * {@code afterSuccess} runs only if the save succeeded (cancel/failure never proceed).
+     */
+    private void saveProject(boolean saveAs, Runnable afterSuccess) {
+        if (saving) {
+            return;
+        }
+        java.nio.file.Path target = (saveAs || session.path() == null) ? chooseSaveFile() : session.path();
+        if (target == null) {
+            return; // cancelled: nothing changes, nothing proceeds
+        }
+        ProjectSession.SaveJob job = session.beginSave(target);
+        saving = true;
+        updateControls();
+        statusLabel.setText("Saving " + target.getFileName() + "…");
+        Thread t = new Thread(() -> {
+            String error = null;
+            try {
+                ProjectStore.save(job.snapshot(), job.target());
+            } catch (ProjectException e) {
+                error = e.getMessage();
+            } catch (RuntimeException e) {
+                error = "Unexpected failure: " + e.getMessage();
+            }
+            String err = error;
+            Platform.runLater(() -> {
+                saving = false;
+                updateControls(); // refresh BEFORE any modal dialog so the window is not left greyed/"saving…"
+                boolean ok = false;
+                if (err == null) {
+                    ok = session.saveSucceeded(job);
+                    statusLabel.setText("Saved " + target.getFileName() + ".");
+                } else {
+                    statusLabel.setText("Save failed: " + err);
+                    Alert a = new Alert(Alert.AlertType.ERROR);
+                    a.setTitle("Save failed");
+                    a.setHeaderText("The project was not saved.");
+                    a.setContentText(err);
+                    a.showAndWait();
+                }
+                updateControls();
+                if (ok && afterSuccess != null) {
+                    afterSuccess.run();
+                }
+            });
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    // ---- export ----
+
+    private void exportCurrent() {
+        PageData page = currentPage();
+        if (page == null) {
+            return;
+        }
+        int number = session.project().indexOf(page.id()) + 1;
+        if (!page.recognized() && page.editedText().isEmpty()) {
+            if (!confirmExport("This page has not been recognized, so the exported file would be empty.")) {
+                return;
+            }
+        } else if (page.recognized() && page.editedText().isEmpty()) {
+            if (!confirmExport("This page was recognized but its transcript is empty.")) {
+                return;
+            }
+        }
+        File f = chooseTextFile("page-" + number + ".txt");
+        if (f == null) {
+            return;
+        }
+        try {
+            TextExport.writeUtf8(f.toPath(), TextExport.renderOne(TextExport.pages(session.project()).get(number - 1)));
+            statusLabel.setText("Exported page " + number + " to " + f.getName() + " (UTF-8).");
+        } catch (ProjectException e) {
+            exportFailed(e);
+        }
+    }
+
+    private void exportAll() {
+        if (session.project().size() == 0) {
+            return;
+        }
+        List<TextExport.ExportPage> pages = TextExport.pages(session.project());
+        List<String> warnings = TextExport.warnings(pages);
+        CheckBox labels = new CheckBox("Add \"--- Page N ---\" labels before each page");
+        VBox content = new VBox(8);
+        content.getChildren().add(new Label(pages.size() + " page(s) in project order, separated by one blank line."));
+        for (String w : warnings) {
+            Label l = new Label("⚠ " + w);
+            l.setWrapText(true);
+            content.getChildren().add(l);
+        }
+        content.getChildren().add(labels);
+        Alert a = new Alert(Alert.AlertType.CONFIRMATION);
+        a.setTitle("Export all pages as text");
+        a.setHeaderText(warnings.isEmpty() ? "Export the reviewed transcripts?"
+                : "Some pages will contribute empty text.");
+        a.getDialogPane().setContent(content);
+        Optional<ButtonType> choice = a.showAndWait();
+        if (choice.isEmpty() || choice.get() != ButtonType.OK) {
+            return;
+        }
+        File f = chooseTextFile("all-pages.txt");
+        if (f == null) {
+            return;
+        }
+        try {
+            TextExport.writeUtf8(f.toPath(), TextExport.renderAll(pages, labels.isSelected()));
+            statusLabel.setText("Exported " + pages.size() + " page(s) to " + f.getName() + " (UTF-8).");
+        } catch (ProjectException e) {
+            exportFailed(e);
+        }
+    }
+
+    private boolean confirmExport(String reason) {
+        Alert a = new Alert(Alert.AlertType.CONFIRMATION);
+        a.setTitle("Export page text");
+        a.setHeaderText(reason);
+        a.setContentText("Export anyway?");
+        Optional<ButtonType> choice = a.showAndWait();
+        return choice.isPresent() && choice.get() == ButtonType.OK;
+    }
+
+    private File chooseTextFile(String suggestion) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Export Text (UTF-8)");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Text (*.txt)", "*.txt"));
+        String base = session.path() == null ? "Untitled"
+                : session.path().getFileName().toString().replaceFirst("\\.nbai$", "");
+        chooser.setInitialFileName(base + "-" + suggestion);
+        return chooser.showSaveDialog(stage);
+    }
+
+    private void exportFailed(ProjectException e) {
+        statusLabel.setText("Export failed: " + e.getMessage());
+        Alert a = new Alert(Alert.AlertType.ERROR);
+        a.setTitle("Export failed");
+        a.setHeaderText("The text was not exported.");
+        a.setContentText(e.getMessage());
+        a.showAndWait();
     }
 
     // ------------------------------------------------------------------
@@ -582,31 +1283,47 @@ public class NotebookAiApp extends Application {
     }
 
     private void extractPage() {
-        if (working == null || jobRunning || rendered == null) {
+        PageData page = currentPage();
+        if (page == null || working == null || jobRunning || rendered == null) {
             return;
         }
-        if (userEdited && !transcript.getText().isEmpty() && !confirmReplace()) {
+        if (pageHasEdits() && !confirmReplace()) {
             return;
         }
+        String pageId = page.id();
         WorkingImage.Rendered snap = rendered;
         runJob("Extracting text…", () -> {
             OcrService svc = service();
             return svc.recognize(snap.bgr(), snap.width(), snap.height(), null);
         }, result -> {
-            regions = new ArrayList<>(result.regions());
-            selectedRegion = -1;
-            selection = null;
-            cropDraft = null;
-            refreshRegionList();
-            lastRawText = result.combinedText();
-            rawOutput.setText(lastRawText.isEmpty() ? "(no text recognized)" : lastRawText);
-            transcript.setText(lastRawText);
-            userEdited = false;
+            // The ticket check in runJob already proved this result belongs to the CURRENT page of the
+            // CURRENT project at the SAME image-preparation revision; it is stored on that page by id.
+            PageData owner = session.project().find(pageId);
+            if (owner == null) {
+                return;
+            }
+            String identity = "unknown";
             try {
+                identity = service().persistableIdentity();
                 lastIdentity = service().identity();
             } catch (OcrException ignored) {
                 // Keep the previous identity line.
             }
+            owner.setRecognition(result.combinedText(), identity, toRegionData(result.regions()));
+            loadingPage = true;
+            try {
+                regions = new ArrayList<>(result.regions());
+                selectedRegion = -1;
+                selection = null;
+                cropDraft = null;
+                refreshRegionList();
+                rawOutput.setText(rawDisplay(owner));
+                transcript.setText(owner.editedText());
+            } finally {
+                loadingPage = false;
+            }
+            modified();
+            pageList.refresh();
             statusLabel.setText("Done: " + regions.size() + " region(s), "
                     + Math.round(result.timings().totalMs()) + " ms total. " + lastIdentity);
             drawOverlay(null);
@@ -642,6 +1359,7 @@ public class NotebookAiApp extends Application {
             return new SelResult(kind + " — " + r.regions().size() + " region(s)",
                     assembled, best, r.timings().totalMs(), cw, ch, crop);
         }, result -> {
+            // Review results are transient: shown, copyable, insertable, but NOT project content.
             selectionText = result.text;
             selectionKind.setText(result.kind + (result.text.isEmpty() ? " (no text)" : ""));
             selectionOutput.setText(result.text.isEmpty() ? "(no text recognized)" : result.text);
@@ -655,9 +1373,15 @@ public class NotebookAiApp extends Application {
     private record SelResult(String kind, String text, double score, double totalMs,
             int cw, int ch, byte[] crop) {}
 
+    /**
+     * Runs an OCR job owned by a {@link JobTicket}. Page switching and every project action are
+     * locked while it runs, AND the result is only applied if the ticket still matches the current
+     * project epoch, page, image-preparation revision and job generation, so a result can never land
+     * on a different page or project.
+     */
     private <T> void runJob(String busyText, JobWork<T> work, JobDone<T> onDone) {
         int gen = ++jobGen;
-        int rev = working.revision();
+        JobTicket ticket = new JobTicket(session.epoch(), activePageId, working.revision(), gen);
         jobRunning = true;
         updateControls();
         statusLabel.setText(busyText);
@@ -678,8 +1402,12 @@ public class NotebookAiApp extends Application {
             Platform.runLater(() -> {
                 jobRunning = false;
                 try {
-                    if (!WorkingImage.isCurrentJob(gen, jobGen, rev, working.revision())) {
-                        statusLabel.setText("Ignored stale result (image changed mid-job).");
+                    boolean pageActive = ticket.pageId() != null && ticket.pageId().equals(activePageId)
+                            && working != null && session.project().find(ticket.pageId()) != null;
+                    boolean accepted = ticket.acceptedBy(session.epoch(), pageActive,
+                            pageActive ? working.revision() : -1, jobGen);
+                    if (!accepted) {
+                        statusLabel.setText("Ignored stale result (page, project or image changed mid-job).");
                     } else if (err != null) {
                         statusLabel.setText("Failed: " + err);
                     } else {
@@ -694,8 +1422,52 @@ public class NotebookAiApp extends Application {
         worker.start();
     }
 
+    /** Runs a non-OCR background task (import, project open) under the same UI lock. */
+    private <T> void runTask(String busyText, TaskWork<T> work, JobDone<T> onDone) {
+        jobRunning = true;
+        updateControls();
+        statusLabel.setText(busyText);
+        Thread worker = new Thread(() -> {
+            T result = null;
+            String error = null;
+            try {
+                result = work.run();
+            } catch (ProjectException e) {
+                error = e.getMessage();
+            } catch (Exception e) {
+                error = "Unexpected failure: " + e.getMessage();
+            }
+            T done = result;
+            String err = error;
+            Platform.runLater(() -> {
+                jobRunning = false;
+                try {
+                    if (err != null) {
+                        updateControls();
+                        statusLabel.setText("Failed: " + err);
+                        Alert a = new Alert(Alert.AlertType.ERROR);
+                        a.setTitle("Operation failed");
+                        a.setHeaderText("The current project was not changed.");
+                        a.setContentText(err);
+                        a.showAndWait();
+                    } else {
+                        onDone.accept(done);
+                    }
+                } finally {
+                    updateControls();
+                }
+            });
+        });
+        worker.setDaemon(true);
+        worker.start();
+    }
+
     private interface JobWork<T> {
         T run() throws OcrException;
+    }
+
+    private interface TaskWork<T> {
+        T run() throws Exception;
     }
 
     private interface JobDone<T> {
@@ -705,7 +1477,7 @@ public class NotebookAiApp extends Application {
     private boolean confirmReplace() {
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
         confirm.setTitle("Extract again?");
-        confirm.setHeaderText("The transcript has unsaved edits.");
+        confirm.setHeaderText("This page's transcript has edits.");
         confirm.setContentText("Extracting again will replace your edits. Continue?");
         Optional<ButtonType> choice = confirm.showAndWait();
         return choice.isPresent() && choice.get() == ButtonType.OK;
@@ -713,19 +1485,34 @@ public class NotebookAiApp extends Application {
 
     /** Re-applies every button's enabled state from current fields (single source of truth). */
     private void updateControls() {
-        if (openButton == null || transcript == null || insertSelectionButton == null) {
+        if (openButton == null || transcript == null || insertSelectionButton == null || pageList == null
+                || miNew == null || miExportAll == null || projectLabel == null || stage == null) {
             return; // Window not fully built yet.
         }
+        PageData page = currentPage();
+        boolean hasRaw = page != null && page.recognized() && !page.rawText().isEmpty();
         ControlState c = ControlState.compute(
                 working != null,
                 jobRunning,
                 selection != null,
                 cropDraft != null,
                 !transcript.getText().isEmpty(),
-                !lastRawText.isEmpty(),
+                hasRaw,
                 !selectionText.isEmpty(),
                 !selectedRegionText().isEmpty());
-        openButton.setDisable(!c.open());
+        ProjectActions pa = ProjectActions.compute(session.project().size(),
+                activePageId == null ? -1 : session.project().indexOf(activePageId), jobRunning, saving);
+        openButton.setDisable(!pa.addImages());
+        removePageButton.setDisable(!pa.removePage());
+        moveUpButton.setDisable(!pa.moveUp());
+        moveDownButton.setDisable(!pa.moveDown());
+        pageList.setDisable(!pa.switchPage());
+        miNew.setDisable(!pa.newProject());
+        miOpen.setDisable(!pa.openProject());
+        miSave.setDisable(!pa.save());
+        miSaveAs.setDisable(!pa.saveAs());
+        miExportCurrent.setDisable(!pa.exportCurrent());
+        miExportAll.setDisable(!pa.exportAll());
         extractButton.setDisable(!c.extract());
         recognizeButton.setDisable(!c.recognizeSelection());
         recognizeLineButton.setDisable(!c.recognizeLine());
@@ -743,6 +1530,19 @@ public class NotebookAiApp extends Application {
         insertSelectionButton.setDisable(!c.copySelection());
         copyRegionButton.setDisable(!c.regionActions());
         insertRegionButton.setDisable(!c.regionActions());
+        updateTitle();
+        pageList.refresh();
+    }
+
+    private void updateTitle() {
+        String name = session.path() == null ? "Untitled" : session.path().getFileName().toString();
+        boolean dirty = session.isDirty();
+        stage.setTitle("notebook-ai — " + name + (dirty ? " *" : ""));
+        projectLabel.setText("Project: " + name + (session.path() == null ? " (not saved yet)" : "")
+                + " — " + session.project().size() + " page(s) — "
+                + (saving ? "saving…" : dirty ? "UNSAVED CHANGES" : "all changes saved"));
+        projectLabel.setStyle(dirty ? "-fx-font-weight: bold; -fx-text-fill: #b00020;"
+                : "-fx-font-weight: bold; -fx-text-fill: #1b5e20;");
     }
 
     // ------------------------------------------------------------------
@@ -803,7 +1603,8 @@ public class NotebookAiApp extends Application {
     }
 
     private void restoreRaw() {
-        if (lastRawText.isEmpty()) {
+        PageData page = currentPage();
+        if (page == null || !page.recognized() || page.rawText().isEmpty()) {
             return;
         }
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
@@ -814,8 +1615,7 @@ public class NotebookAiApp extends Application {
         if (choice.isEmpty() || choice.get() != ButtonType.OK) {
             return;
         }
-        transcript.setText(lastRawText);
-        userEdited = false;
+        transcript.setText(page.rawText()); // listener records it as the page's edited text
         statusLabel.setText("Transcript restored to raw OCR output.");
     }
 

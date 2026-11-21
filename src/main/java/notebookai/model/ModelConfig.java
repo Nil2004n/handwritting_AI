@@ -99,6 +99,19 @@ public final class ModelConfig {
         }
     }
 
+    /** Short model fingerprint (first 12 hex of det/rec sha256 from the checksums manifest), no paths. */
+    public static String modelFingerprint(Path modelsDir) {
+        try {
+            Map<String, String> m = readManifest(modelsDir.resolve(CHECKSUMS));
+            String det = m.getOrDefault(DET_ONNX, "?");
+            String rec = m.getOrDefault(REC_ONNX, "?");
+            return "det=" + det.substring(0, Math.min(12, det.length()))
+                    + " rec=" + rec.substring(0, Math.min(12, rec.length()));
+        } catch (IOException | RuntimeException e) {
+            return "det=? rec=?";
+        }
+    }
+
     static Map<String, String> readManifest(Path manifest) throws IOException {
         Map<String, String> result = new LinkedHashMap<>();
         for (String line : Files.readAllLines(manifest, StandardCharsets.UTF_8)) {

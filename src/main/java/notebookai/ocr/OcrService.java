@@ -57,6 +57,16 @@ public final class OcrService implements AutoCloseable {
                 + (Experiments.any() ? " | " + Experiments.describe() : "");
     }
 
+    /**
+     * Identity saved with a page's OCR result so it can be interpreted later: model name, model file
+     * fingerprints, detector score mode and drop score (and any opt-in experiment). No file paths.
+     */
+    public String persistableIdentity() {
+        return ModelConfig.MODEL_IDENTITY + " | " + ModelConfig.modelFingerprint(modelsDir)
+                + " | det score: " + SCORE_MODE + " | drop_score " + DROP_SCORE
+                + (Experiments.any() ? " | " + Experiments.describe() : "");
+    }
+
     private final OrtEnvironment env;
     private final OrtSession det;
     private final OrtSession rec;
