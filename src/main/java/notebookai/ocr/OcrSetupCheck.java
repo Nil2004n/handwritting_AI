@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;

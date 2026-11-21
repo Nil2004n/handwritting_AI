@@ -1,8 +1,8 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import notebookocr.model.OcrResult;
+import notebookai.model.OcrResult;
 
 /**
  * CLI entry for {@code ./gradlew recognizeImage -Pimage=/path/to.jpg

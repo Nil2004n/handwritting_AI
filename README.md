@@ -1,4 +1,4 @@
-# NotebookOCR (Java desktop, Phase 1 — working OCR)
+# notebook-ai (Java desktop, Phase 1 — working OCR)
 
 Offline handwritten-text OCR: open an image → preview → extract real text
 → edit → copy. Pure Java 21, JavaFX UI, ONNX Runtime CPU, bundled-local

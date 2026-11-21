@@ -3,7 +3,7 @@ plugins {
     id 'application'
 }
 
-group = 'ai.notebookocr'
+group = 'ai.notebookai'
 version = '0.1.0'
 
 repositories {
@@ -36,7 +36,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'notebookocr.ui.Main'
+    mainClass = 'notebookai.ui.Main'
 }
 
 tasks.named('test', Test) {
@@ -48,7 +48,7 @@ tasks.register('verifyOcrSetup', JavaExec) {
     group = 'verification'
     description = 'Loads detector/recognizer ONNX sessions and prints their I/O metadata.'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'notebookocr.ocr.OcrSetupCheck'
+    mainClass = 'notebookai.ocr.OcrSetupCheck'
 }
 
 // Phase 1: end-to-end text extraction over one image file.
@@ -56,7 +56,7 @@ tasks.register('recognizeImage', JavaExec) {
     group = 'verification'
     description = 'Runs detector + recognizer over -Pimage=/path/to.jpg (optional -PdebugDir=/tmp/ocr-debug).'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'notebookocr.ocr.RecognizeCli'
+    mainClass = 'notebookai.ocr.RecognizeCli'
     if (project.hasProperty('image')) {
         args project.property('image')
     }

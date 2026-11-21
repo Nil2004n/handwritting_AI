@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
@@ -12,8 +12,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import notebookocr.model.ModelConfig;
-import notebookocr.model.OcrResult;
+import notebookai.model.ModelConfig;
+import notebookai.model.OcrResult;
 
 /**
  * Image-to-text OCR over the bundled PP-OCRv6_small sessions.

@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import ai.onnxruntime.NodeInfo;
 import ai.onnxruntime.OrtEnvironment;
@@ -7,7 +7,7 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.TensorInfo;
 import java.nio.file.Path;
 import java.util.Map;
-import notebookocr.model.ModelConfig;
+import notebookai.model.ModelConfig;
 
 /**
  * Phase 0 OCR gate: validates assets, initializes ONNX Runtime, loads the

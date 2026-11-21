@@ -99,6 +99,19 @@ per-region correction, and worked-calculation transcription using the
 `samples/transcriptions/*.txt` references. Do NOT claim handwriting
 accuracy until measured on real handwriting.
 
+## Rename note (2026-11-21)
+Product renamed `NotebookOCR` → `notebook-ai` (rename-only commit, no
+behavior/model/dependency changes): window title + heading, Gradle root
+project `notebook-ai` (dist `build/install/notebook-ai`, jar
+`notebook-ai-0.1.0.jar`, group `ai.notebookai`), Java package
+`notebookocr.*` → `notebookai.*` (hyphen-free), class `NotebookApp` →
+`NotebookAiApp` (`Main` unchanged), README title. Verified: clean build,
+25/25 tests, `verifyOcrSetup` pass, CLI smoke on the handwriting sample
+identical, window title `notebook-ai` confirmed by screenshot.
+Intentionally untouched: PaddleOCR/ONNX names, model files/checksums/dicts,
+third-party license, `archive/android-rn-phase0` tag, historical commits
+(which still say NotebookOCR).
+
 ## Commit
 Phase 1 commit on `main` (see `git log`). Models stay git-ignored;
 no push.

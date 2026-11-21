@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

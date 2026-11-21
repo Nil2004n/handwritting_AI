@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -55,25 +55,25 @@ class PipelineTest {
     void combinedTextJoinsRegionsWithLineBreaks() {
         var regions =
                 java.util.List.of(
-                        new notebookocr.model.OcrResult.TextRegion(
+                        new notebookai.model.OcrResult.TextRegion(
                                 new double[][] {{0, 0}, {1, 0}, {1, 1}, {0, 1}},
                                 new int[] {0, 0, 1, 1},
                                 "hello",
                                 0.9,
                                 0.95),
-                        new notebookocr.model.OcrResult.TextRegion(
+                        new notebookai.model.OcrResult.TextRegion(
                                 new double[][] {{0, 2}, {1, 2}, {1, 3}, {0, 3}},
                                 new int[] {0, 2, 1, 3},
                                 "world",
                                 0.9,
                                 0.95));
         var result =
-                new notebookocr.model.OcrResult(
+                new notebookai.model.OcrResult(
                         10,
                         10,
                         regions,
                         "hello\nworld",
-                        new notebookocr.model.OcrResult.Timings(0, 0, 0, 0, 0, 0, 0, 0));
+                        new notebookai.model.OcrResult.Timings(0, 0, 0, 0, 0, 0, 0, 0));
         assertEquals("hello\nworld", result.combinedText());
         assertEquals(2, result.regions().size());
     }

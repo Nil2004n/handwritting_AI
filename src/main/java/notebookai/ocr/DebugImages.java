@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import javax.imageio.ImageIO;
-import notebookocr.model.OcrResult;
+import notebookai.model.OcrResult;
 
 /**
  * Debug artifact writer: source overlay with region boxes plus one image per

@@ -1,4 +1,4 @@
-package notebookocr.ui;
+package notebookai.ui;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -20,10 +20,10 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import notebookocr.model.ModelConfig;
-import notebookocr.model.OcrResult;
-import notebookocr.ocr.OcrException;
-import notebookocr.ocr.OcrService;
+import notebookai.model.ModelConfig;
+import notebookai.model.OcrResult;
+import notebookai.ocr.OcrException;
+import notebookai.ocr.OcrService;
 
 /**
  * Phase 1 window: open image → preview → extract text → edit → copy.
@@ -33,7 +33,7 @@ import notebookocr.ocr.OcrService;
  * running, the image cannot be changed mid-job, and re-extracting over
  * edited text asks for confirmation first.
  */
-public class NotebookApp extends Application {
+public class NotebookAiApp extends Application {
 
     private Label statusLabel;
     private ImageView preview;
@@ -50,7 +50,7 @@ public class NotebookApp extends Application {
 
     @Override
     public void start(Stage stage) {
-        Label title = new Label("NotebookOCR");
+        Label title = new Label("notebook-ai");
         title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
         Label model = new Label("Model: " + ModelConfig.MODEL_IDENTITY);
         model.setWrapText(true);
@@ -88,7 +88,7 @@ public class NotebookApp extends Application {
         root.setPadding(new Insets(16));
         VBox.setVgrow(transcript, Priority.ALWAYS);
 
-        stage.setTitle("NotebookOCR");
+        stage.setTitle("notebook-ai");
         stage.setScene(new Scene(root, 580, 760));
         stage.show();
     }

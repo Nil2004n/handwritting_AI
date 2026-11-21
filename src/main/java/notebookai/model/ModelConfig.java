@@ -1,4 +1,4 @@
-package notebookocr.model;
+package notebookai.model;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -44,7 +44,7 @@ public final class ModelConfig {
     }
 
     /** Throws a clear error naming every missing required asset. */
-    public static void validateFiles(Path modelsDir) throws notebookocr.ocr.OcrException {
+    public static void validateFiles(Path modelsDir) throws notebookai.ocr.OcrException {
         List<String> missing = new ArrayList<>();
         for (String name : new String[] {DET_ONNX, DET_YML, REC_ONNX, REC_YML, CHECKSUMS}) {
             if (!Files.isRegularFile(modelsDir.resolve(name))) {
@@ -52,7 +52,7 @@ public final class ModelConfig {
             }
         }
         if (!missing.isEmpty()) {
-            throw new notebookocr.ocr.OcrException(
+            throw new notebookai.ocr.OcrException(
                     "OCR setup incomplete: missing files in "
                             + modelsDir.toAbsolutePath()
                             + ": "
@@ -65,7 +65,7 @@ public final class ModelConfig {
      * Validates SHA-256 checksums recorded in {@code checksums.sha256}
      * (standard {@code sha256sum} format) against the files on disk.
      */
-    public static void validateChecksums(Path modelsDir) throws notebookocr.ocr.OcrException, IOException {
+    public static void validateChecksums(Path modelsDir) throws notebookai.ocr.OcrException, IOException {
         Map<String, String> expected = readManifest(modelsDir.resolve(CHECKSUMS));
         List<String> problems = new ArrayList<>();
         for (Map.Entry<String, String> entry : expected.entrySet()) {
@@ -80,7 +80,7 @@ public final class ModelConfig {
             }
         }
         if (!problems.isEmpty()) {
-            throw new notebookocr.ocr.OcrException(
+            throw new notebookai.ocr.OcrException(
                     "OCR setup invalid: checksum problems in "
                             + modelsDir.toAbsolutePath()
                             + ": "

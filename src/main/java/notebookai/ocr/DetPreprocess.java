@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 /**
  * Detector preprocessing replicating upstream {@code DetResizeForTest}

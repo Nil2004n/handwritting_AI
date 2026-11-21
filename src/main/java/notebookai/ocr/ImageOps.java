@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.metadata.Metadata;

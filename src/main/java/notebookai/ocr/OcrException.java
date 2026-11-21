@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 /** Checked failure for OCR setup/validation problems with actionable messages. */
 public class OcrException extends Exception {

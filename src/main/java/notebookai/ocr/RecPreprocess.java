@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 /**
  * Recognizer preprocessing replicating upstream {@code resize_norm_img}

@@ -1,4 +1,4 @@
-package notebookocr.ocr;
+package notebookai.ocr;
 
 import java.util.ArrayList;
 import java.util.List;
