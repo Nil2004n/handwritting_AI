@@ -33,7 +33,10 @@ GRADLE_FLAGS += -Dorg.gradle.java.home=/usr/lib/jvm/java-21-openjdk-amd64
 endif
 GRADLE = ./gradlew $(GRADLE_FLAGS)
 
-.PHONY: help build models test verify recognize run clean install uninstall system-deps check-dist check-models
+.PHONY: help build models test verify recognize run clean install uninstall system-deps check-dist check-models check-not-root
+
+# Effective user id; overridable ONLY so tools/verify-install.sh can exercise the root guard without being root.
+CURRENT_UID ?= $(shell id -u)
 
 help:
 	@echo "Targets: build test verify recognize run clean install uninstall system-deps"
@@ -48,26 +51,26 @@ help:
 	@echo "  make run                  launch the JavaFX UI (needs display)"
 	@echo "  make clean                gradle clean"
 
-build:
+build: check-not-root
 	$(GRADLE) installDist
 
-models:
+models: check-not-root
 	sh tools/download-models.sh
 
-test:
+test: check-not-root
 	$(GRADLE) clean build
 
-verify:
+verify: check-not-root
 	$(GRADLE) verifyOcrSetup
 
-recognize:
+recognize: check-not-root
 	@if [ -z "$(IMAGE)" ]; then echo "Usage: make recognize IMAGE=/path/to.jpg"; exit 2; fi
 	$(GRADLE) recognizeImage -Pimage="$(IMAGE)"
 
-run:
+run: check-not-root
 	$(GRADLE) run
 
-clean:
+clean: check-not-root
 	$(GRADLE) clean
 
 # System Java 21 runtime (explicit opt-in; prompts for sudo).
@@ -80,9 +83,23 @@ system-deps:
 
 # The staged distribution must already exist (built as the normal user, so
 # `sudo make install` never compiles or downloads anything as root).
+# Gradle-calling targets (build, models, test, verify, recognize, run, clean) must never run as root:
+# they would create root-owned files in this repository (this happened once with `sudo make build`).
+# Only `make install` (a plain file copy, never a build) may need sudo.
+check-not-root:
+	@if [ "$(CURRENT_UID)" = "0" ]; then \
+		echo "error: refusing to run 'make $(MAKECMDGOALS)' as root: it runs Gradle/downloads and would create"; \
+		echo "       root-owned files in this repository. Run it as your normal user:"; \
+		echo "         make build models           # normal user"; \
+		echo "         sudo make install           # copy only (or: make install PREFIX=\$$HOME/.local, no sudo)"; \
+		exit 1; \
+	fi
+
 check-dist:
 	@if [ ! -x build/install/notebook-ai/bin/notebook-ai ]; then \
-		echo "error: staged app missing; run 'make build' first (as your normal user)."; \
+		echo "error: staged app missing. Build it first AS YOUR NORMAL USER (do NOT use sudo):"; \
+		echo "         make build models"; \
+		echo "       then run 'make install' again (with sudo only if the prefix needs it)."; \
 		exit 1; \
 	fi
 
