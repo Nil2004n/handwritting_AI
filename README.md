@@ -78,7 +78,7 @@ make install PREFIX="$HOME/.local"     # user-local, no sudo
 sudo make install                      # optional system-wide; copy only
 sh tools/verify-install.sh             # checks the above in a temporary prefix
 ```
-Tested on Linux only. Closing the window while OCR/import/open/save runs waits for it (nothing is cancelled). Project limits: see HANDOFF.md.
+Tested on Linux only (Windows/macOS untested; `sudo make install` not exercised). Closing the window while OCR/import/open/save runs waits for it (nothing is cancelled). Project limits: see HANDOFF.md.
 
 ## Install globally (Makefile)```sh
 make build models             # as your normal user (compiles, fetches models)
@@ -106,11 +106,16 @@ order. No table/formula/numericals handling.
 ## Current limitations
 - Rendered print English transcribes near-perfectly; the bundled synthetic
   scribbles are not real text (regions found, text meaningless by design).
-- Real handwriting (2026-11-21): 3-line repo sample CER 0.179 / WER 0.308;
-  4-line private sample (`~/Desktop/test.jpg`, not committed) CER 0.055 /
+- Real handwriting (2026-11-21): 3-line repo sample CER 0.179 / WER 0.385;
+  4-line private sample (not committed) CER 0.055 /
   WER 0.167. Single-page evidence only — broader coverage needs more pages
   with exact transcriptions (contributions welcome: drop them in
   `eval-local/` with a `cases.tsv` entry).
+- Resource use: only the active page is decoded; a 12 MP page switch took roughly 2 GB RSS at peak in a stress run (about 2.6 GB peak overall;
+  post-GC heap 0.2-0.5 GB). Images that cannot fit in the heap are refused before decoding. The default maximum project sizes were not stress-tested.
+- Failures inside background work are reported and the app returns to a usable state, but recovery from every out-of-memory or fatal runtime condition is not guaranteed.
+  Saves are write-temp, fsync, validate, atomic rename; crash/power-loss durability is not claimed.
+- Verified on Linux only. Windows, macOS and privileged `sudo make install` were not exercised.
 - CPU only, sequential single-image inference, no batching optimization.
 - Debug overlays/crops are opt-in and never written into the source tree.
 

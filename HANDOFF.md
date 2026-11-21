@@ -790,9 +790,29 @@ peak (HWM 2.59 GB), Java heap after GC stayed 0.18-0.46 GB (RSS is mostly freed-
 (thumbnails only); only the active page is decoded. Measurement limit: RSS sampling, no native memory tracking. 4 GB-RAM-class machine assumed;
 projects approaching the 2 GiB total limit were NOT tested.
 OCR baselines re-measured after all changes (unchanged): repo photo CER 12/67, WER 5/13; private photo CER 5/91, WER 3/18; print exact.
-GUI findings of note: GTK dialog typed names may get a doubled `.nbai` (the app only appends when missing; dialog behaviour, not changed).
-Unverified in Phase 5: fresh installed-GUI multi-page regression (per-page straighten, region copy/insert, reorder, export clipboard) — my scripted
-clicks were unreliable; relies on Phase 4 GUI pass + automated pixel/reconstruction tests; privileged `sudo make install` not exercised; crash/power-loss durability
-is not claimed (write-temp, fsync, validate, atomic rename only).
-Release assessment: **implementation complete; acceptance pending** — blocker: the installed-GUI multi-page regression above was not re-run in Phase 5.
-No tag, GitHub release or installer created; Phase 5 commits are local and unpushed.
+Doubled-extension observation: see the Phase 5 closure section (cause established there; the earlier remark attributing it to the dialog was not evidence-based).
+(The earlier 'unverified / acceptance pending' notes here are superseded by the closure section below.)
+
+## Phase 5 acceptance closure (2026-11-21)
+Checkpoint verified: `main`, local HEAD `e00c284`, `origin/main` `042d267` (ancestor of HEAD, no divergence), clean tree, five unpushed Phase 5 commits.
+Evidence kinds are kept separate below: **[GUI]** = observed in the installed app on a private Xvfb display with xdotool/xclip, **[AUTO]** = automated tests, **[INSPECT]** = code reading.
+
+Installed build tested: `~/.local/lib/notebook-ai/lib/notebook-ai-0.1.0.jar`, sha256 prefix `b53fab85634553fc` for the GUI checks (identical to the staged `build/install` jar at that time).
+After the checks, `make build` + `make install` were re-run from the same clean tree (no source change); the rebuilt jar has a different hash (`cf2349eb20abd4f0`, jar rebuild is not bit-for-bit
+reproducible; I did not diff the contents) and the final smoke check (open project, page select, Extract-again confirmation, Cancel, Quit) was repeated on it. The full GUI checks below were NOT repeated on the rebuilt jar.
+Disposable generated images (`small1..5.png`, different texts, no private data). Page names below use the file names.
+
+| Check | Method | Result |
+|---|---|---|
+| A. independent preparation [GUI] | 5 pages; page `small5`: Right turn then straighten (slider, Apply) = 6.0 deg; `small4`: Left turn, 0 deg; 3 round trips between them, screenshots compared | each page kept its own image, orientation and straighten value; no leakage. Crop in the GUI was not exercised (crop sequences are [AUTO] only). |
+| B. region copy / insert [GUI] | Extract `small3`, `small2`; select a region; Copy Region with a sentinel placed on the clipboard first; Insert at Caret at position 0 (page 2) and end (page 3) | `xclip -o` returned exactly `Page 2 total 12.50` and `Quick brown fox` (first attempt missed the button; the sentinel survived, confirming the check reads the real clipboard). Insert changed only the intended page at the caret; the other page stayed unedited; raw OCR in the saved file is unchanged |
+| C. reorder + export [GUI] | moved a page to position 1 with the up button; Export All Pages without and with the label option; bytes read back | exact UTF-8, project order, `\n\n` separators, empty text for unrecognized pages, `--- Page N ---` labels when ticked (verified byte-for-byte). Export left the title clean (`all changes saved`) after a save. |
+| D. save / close / reopen [GUI] | Save, Project>Quit, relaunch, Open, view each page, inspect `project.json` | order, orientations, 6.0 deg straighten, regions on both recognized pages, recognized/edited status restored; raw and edited text distinct and exact; per-page preparation distinct. Pre-close captures were not taken (scripting error), so this compares against earlier observed state, not a pixel diff; pixel-exact reconstruction is [AUTO] |
+| E. filename [GUI + probe] | Save with no extension, Save As with `.nbai`, select-all before typing; plus a standalone JavaFX probe with the same filter | no extension -> `x.nbai`; `x.nbai` stays single. The doubled `.txt.txt`/`.nbai.nbai` seen earlier appears only when typing after Ctrl+L WITHOUT replacing the pre-filled name's extension; reproduced with a standalone probe that has `setInitialFileName("...txt")` (returned `probe3.txt.txt`) and NOT without it. App code writes exactly the chosen path and appends `.nbai` only if missing. No code change. |
+Defects found in closure: none. Note: stray keystrokes while no dialog was open once activated a focused button (reordered a page) — a test-method slip, not an app defect.
+Automated: `./gradlew clean build` 130 tests, 0 failures; `verifyOcrSetup` OK; `tools/verify-install.sh` ALL CHECKS PASSED (temporary prefix, no sudo).
+OCR re-measured at closure: repo photo CER 12 edits (0.179) WER 5 edits; private photo CER 5 edits (0.055) WER 3 edits; rendered print exact. Unchanged.
+Limitations kept explicit (not verified support): `BackgroundTasks` guarantees a completion is delivered after an `Error`, not recovery from every out-of-memory or fatal runtime condition (JVM/native state may be unusable);
+stress test observed about 2.6 GB peak RSS and post-GC Java heap about 0.18-0.46 GB; full default maximum project sizes were not stress-tested; privileged system install (`sudo make install`) was not exercised;
+Windows and macOS were not tested; no crash/power-loss durability claim; a GUI crop sequence and the close-during-open/import/save-with-wait paths were [GUI]-checked only for OCR and save (open/import not separately).
+Phase 5 status: **Accepted for the documented scope** (Linux only; this is closure of the roadmap, not proof of perfect recognition or platform coverage). No tag, release or installer.
