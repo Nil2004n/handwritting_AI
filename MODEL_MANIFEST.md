@@ -92,6 +92,9 @@ Checked boundary by boundary against `operators.py`, `rec_img_aug.py`,
   default, verified in code and by space firing at word gaps). CTC decode
   drops class 0 and collapses repeats, matching `CTCLabelDecode.decode`.
 - No truncation: full logit sequences decoded; no length caps anywhere.
-- Conclusion: no pipeline defect found; remaining errors are single-glyph
-  confusions (b/h, o/a, I/L, C/O) plus one insertion, all at high model
-  confidence. No production change made (see HANDOFF Phase 3).
+- Conclusion: no pipeline defect found in the inspected boundaries. CORRECTION (Phase 3b):
+  the earlier phrase "all at high model confidence" was wrong; per-frame output shows some
+  errors are low-margin (ITSIELF insertion 0.420 vs blank 0.364; b->h 0.414 vs d 0.251) while
+  others are confident (o->a 0.990). This audit compared code to upstream by reading; it did not
+  numerically cross-check against a reference cv2/onnxruntime stack (not installed). No
+  production change made (see HANDOFF Phase 3 / 3b).

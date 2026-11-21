@@ -345,3 +345,87 @@ A tighter crop of the same page (GUI) read different text (e.g. `Debjay.`), i.e.
 ## Commit
 Phase 3 commit on `main` (see `git log`). Models stay git-ignored;
 private eval cases stay out of git; no push.
+
+## Phase 3b: recognition-boundary investigation (2026-11-22) — PRE-REGISTRATION (written before any experiment code)
+Baseline reproduced from a clean build (60 tests green; `verifyOcrSetup` ok): repo photo CER 12/67 WER 4/13; private photo
+CER 5/91 WER 3/18; identical transcripts to the Phase 3 report. `./gradlew ctcProbe -PevalManifest=...` (new, diagnostic only)
+shows the recognizer output is a per-frame normalized distribution (row sums 1.0), 8 px/frame, and that decoding the probed
+logits reproduces production text for every region (decode-consistent=true).
+Observed (see results section when completed): in the private photo the expected char is rank 2 (I, C, o) or 3 (b) at the
+erroneous frame; two errors are LOW margin (ITSIELF insertion 0.420 vs blank 0.364; b->h 0.414 vs d 0.251), so the earlier
+"all high confidence" statement was wrong. In the repo photo line 3 the padded crop is 1416x438 -> 156 px wide -> ~20 valid
+frames for 18 expected chars (frame starvation) and 11 edits.
+
+Experiments (opt-in only, default OFF, never selected by ground truth/confidence; every variant reported):
+- E-A  crop padding fraction. Hypothesis: unclip padding inflates the crop height so text occupies a small part of the 48 px
+  input and a tall crop leaves few frames per character; reducing padding for the RECOGNIZER crop only should help lines like
+  repo-photo line 3 and may hurt lines that need padding at stroke ends. Single factor: recognizer crop corners =
+  core + lambda*(unclipped-core); detector, boxes, reading order unchanged. Variants: lambda=0.5 and lambda=0 (baseline 1.0).
+  Plausible for this model: PP-OCRv6 rec is trained on tight 48 px-high line crops. Samples: both handwriting photos
+  (per-case), rendered print fixture (regression). Improvement = fewer char edits on a case without more edits on the others.
+  Caveat: earlier ad-hoc tight crops gave mixed results on one page; this is the first controlled comparison.
+- E-B  decoder alternatives. Hypothesis: CTC prefix beam search (width 8, no LM) can fix low-margin errors that greedy
+  argmax commits to (e.g. the single-frame ITSIELF insertion) because it sums over alignments. Expected small effect since
+  most correct chars are far from top-1. Single factor: decoder; recognition score kept from greedy for the drop_score filter.
+  Same samples/criteria.
+Not run (no new hypothesis): channel reversal, straighten sweeps, width caps, model swap (needs approval).
+
+### Phase 3b results (all completed variants reported; exploratory, 2 handwriting pages)
+Identity: jar `99b87fb06190…` (staged == `~/.local`), models det `d73e0058b7a8…` rec `5435fd747c9e…`
+(rec.yml `ab078671…`, det.yml `193f4352…`), detector score mode SLOW, Evaluate path = production `OcrService`.
+Images: repo photo `a52576ac7177…` 1800x4000 rotate 0; private photo `acc880a8b518…` 4000x1800 rotate 3 (git-ignored manifest
+`eval-local/cases.tsv`, expected text exactly as supplied: `debjoy` lowercase — the handwriting's first letter looks capital, so
+case ground truth for that word is ambiguous and was NOT guessed; it costs at most 1 edit). CER/WER: raw code points / whitespace
+tokens, no normalization, per case (no pooled aggregate across pages: 2 pages are not independent samples of handwriting).
+
+Baseline (reproduced, clean build, 65 tests green, verifyOcrSetup ok):
+repo CER 12/67 (0.179) WER 4/13; private CER 5/91 (0.055) WER 3/18; synthetic print CER 0/… (separate, not handwriting).
+
+Recognition-boundary diagnostics (`./gradlew ctcProbe -PevalManifest=...`; probe decode == production text for every region):
+- Output tensor [steps x 18710], row sums 1.0 (per-frame normalized; NOT calibrated), 8 px/frame, steps = padded width/8.
+- Private photo error classification (character alignment): ITSELF: 1 insertion (I at frame 20: top1 0.420 vs blank 0.364 — low
+  margin); COMPLICATED: 2 substitutions (I->L top1 0.738, expected I 0.202 rank 2; C->O 0.889, expected C 0.097 rank 2);
+  debjoy: 2 substitutions (b->h 0.414 vs d 0.251, expected b 0.147 rank 3; o->a 0.990, expected o 0.008 rank 2). Crops are
+  well-formed; all errors arise at the recognition output (not detector, not assembly). Line 1 and 4 exact.
+- Repo photo: line 2: 1 substitution (I->L 0.697, expected I 0.166 rank 2). Line 3 (11 edits): the recognizer input is the
+  1416x438 padded crop resized to 156 px wide = ~20 valid frames for 18 expected chars; output has 5 deletions and many
+  low-margin substitutions (top1 0.23-0.38). This is consistent with a starved frame budget but not proof of it.
+- Correction: the Phase 3 statement "all at high model confidence" was wrong (see above) and is fixed in MODEL_MANIFEST.
+
+Experiments (opt-in JVM flags via `-PexpJvm=...`, default OFF, shown in `identity()`):
+| Variant | repo photo (edits CER/WER) | private photo (edits CER/WER) | print |
+|---|---|---|---|
+| control | 12 (0.179) / 4 | 5 (0.055) / 3 | 0 |
+| E-B beam8 (`-Dnotebookai.exp.beam=8`) | 11 (0.164) / 4: `My Nowet leiy` | 4 (0.044) / 2: ITSELF fixed, rest same | 0 |
+| E-A cropPad 0.5 | 8 (0.119) / 4: `COmMpLICATED`, `My Nave is. dedjey` | 8 (0.088) / 4: `My`->`M`, `pvogvess.`, COmpLLOATED | 0 |
+| E-A cropPad 0 | 7 (0.104) / 2: `COmpLLCATED`, `My Name is dehjay` | 19 (0.209) / 7: lost/garbled lines | 11 (0.151) |
+Judgement: E-B improved both photos by one edit each (ITSELF fixed; no print regression) — too small, 2 pages, same notebook:
+NOT promoted, stays experimental. E-A helps the repo photo but hurts the private photo and (at 0) print: padding trade-off is
+input-dependent (tighter crops clip stroke ends); NOT promoted, hypothesis only partly supported (frame-budget story fits repo
+line 3, not the private photo). Greedy score is kept under beam, so drop_score filtering is unchanged. No ground truth,
+confidence or filename selects any output. Not run: antialiased downscale (hypothesis recorded, no evidence it matters),
+straighten/width-cap/channel experiments (no new hypothesis), any model swap.
+Production changes: none to behavior. Added diagnostics only: `OcrService.recognizeLogits` (decode path unchanged),
+`CtcProbe`, `Alignment`, `Experiments` (off by default; tested), `CtcDecoder.decodeBeam` (experimental, tested).
+Installed-GUI smoke (private Xvfb, `~/.local` build): page Extract == CLI baseline; Restore Raw after an edit returned the exact
+raw text; Recognize Line `LIFE ISENF IS COMPLLOATED` and Recognize Selection (3 lines) unchanged vs the Phase 2 check.
+
+Reproduce: `./gradlew clean build verifyOcrSetup`; `./gradlew evaluate -PevalManifest=eval/cases.tsv` (and
+`eval-local/cases.tsv` if present); `./gradlew ctcProbe -PevalManifest=eval-local/cases.tsv -PdebugDir=/tmp/probe`;
+variants: `./gradlew evaluate -PevalManifest=eval-local/cases.tsv -PexpJvm="-Dnotebookai.exp.beam=8"` or
+`-PexpJvm="-Dnotebookai.exp.cropPad=0.5"`.
+
+### Dataset inventory and limits
+Approved real handwriting with transcription: exactly 2 pages (same notebook/pen/writer, same session) => generalization cannot be
+assessed; crops of a page are not independent. Synthetic scribbles have no ground truth; rendered print is a regression check only.
+No numerals/equations/units ground truth exists, so no numeric accuracy is claimed.
+REQUEST for more pages (keep private; add to `eval-local/cases.tsv`, nothing is uploaded anywhere): several writers and styles
+(print, cursive, mixed, UPPERCASE), names and unfamiliar words, numbers/decimals/signs/units, simple equations, different
+lighting/angles/ruled and plain paper; each with the exact verbatim transcription, intended line breaks, and case as written.
+
+### Unproven / needs approval or evidence
+- Whether the remaining glyph confusions are model-only is NOT established (not disproven either).
+- A numeric cross-check of our hand-ported resize/warp/normalization against a reference stack (cv2 + onnxruntime in a throwaway
+  venv, roughly 100 MB of PyPI downloads, no project dependency) was not done: needs approval.
+- Recognizer comparison: no candidate was researched or run; any download/model change needs approval and a specific candidate.
+- Beam search and crop padding need many more pages before any production decision.
