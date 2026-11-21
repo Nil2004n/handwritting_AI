@@ -367,4 +367,60 @@ public final class ImageOps {
         }
         return dst;
     }
+
+    /** Rendered rotated image: BGR bytes plus dimensions. */
+    public record Rotated(byte[] bgr, int width, int height) {}
+
+    /**
+     * Rotates counter-clockwise by an arbitrary angle about the image center,
+     * expanding the canvas to fit (white fill outside the source). Bicubic
+     * sampling with border replication inside the source, matching the warp
+     * path's kernel. Used for small straightening angles only.
+     */
+    public static Rotated rotateBicubic(byte[] src, int w, int h, double degreesCcw) {
+        double theta = Math.toRadians(degreesCcw);
+        double cos = Math.cos(theta);
+        double sin = Math.sin(theta);
+        int nw = (int) Math.ceil(Math.abs(w * cos) + Math.abs(h * sin));
+        int nh = (int) Math.ceil(Math.abs(w * sin) + Math.abs(h * cos));
+        nw = Math.max(nw, 1);
+        nh = Math.max(nh, 1);
+        double cx = (w - 1) / 2.0;
+        double cy = (h - 1) / 2.0;
+        double ncx = (nw - 1) / 2.0;
+        double ncy = (nh - 1) / 2.0;
+        byte[] dst = new byte[nw * nh * 3];
+        for (int y = 0; y < nh; y++) {
+            for (int x = 0; x < nw; x++) {
+                double dx = x - ncx;
+                double dy = y - ncy;
+                // Inverse rotation (dst -> src), clockwise by theta.
+                double fx = cx + dx * cos + dy * sin;
+                double fy = cy - dx * sin + dy * cos;
+                int out = (y * nw + x) * 3;
+                if (fx < 0 || fy < 0 || fx > w - 1 || fy > h - 1) {
+                    dst[out] = (byte) 255;
+                    dst[out + 1] = (byte) 255;
+                    dst[out + 2] = (byte) 255;
+                    continue;
+                }
+                int sx = (int) Math.floor(fx);
+                int sy = (int) Math.floor(fy);
+                for (int c = 0; c < 3; c++) {
+                    double v = 0.0;
+                    for (int j = -1; j <= 2; j++) {
+                        double wy = cubic(fy - (sy + j));
+                        int yy = clamp(sy + j, 0, h - 1);
+                        for (int i = -1; i <= 2; i++) {
+                            double wx = cubic(fx - (sx + i));
+                            int xx = clamp(sx + i, 0, w - 1);
+                            v += wx * wy * (src[(yy * w + xx) * 3 + c] & 0xFF);
+                        }
+                    }
+                    dst[out + c] = (byte) clamp((int) Math.round(v), 0, 255);
+                }
+            }
+        }
+        return new Rotated(dst, nw, nh);
+    }
 }

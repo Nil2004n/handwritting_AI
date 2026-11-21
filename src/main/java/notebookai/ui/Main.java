@@ -12,6 +12,9 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) {
+        Module fx = javafx.application.Application.class.getModule();
+        System.out.println("JavaFX runtime module: "
+                + (fx.isNamed() ? fx.getName() + " (named module)" : "unnamed (classpath)"));
         Application.launch(NotebookAiApp.class, args);
     }
 }

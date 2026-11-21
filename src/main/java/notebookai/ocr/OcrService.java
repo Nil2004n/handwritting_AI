@@ -125,150 +125,172 @@ public final class OcrService implements AutoCloseable {
      * Debug output is off by default and never goes into the source tree.
      */
     public OcrResult recognize(Path imagePath, Path debugDir) throws OcrException {
-        long start = System.nanoTime();
-        ImageOps.DecodedImage decoded;
         try {
-            long t0 = System.nanoTime();
-            decoded = ImageOps.decode(imagePath);
-            double decodeMs = (System.nanoTime() - t0) / 1e6;
-
-            long t1 = System.nanoTime();
-            DetPreprocess.DetInput input =
-                    DetPreprocess.preprocess(decoded.bgr(), decoded.width(), decoded.height());
-            double detPreMs = (System.nanoTime() - t1) / 1e6;
-
-            long t2 = System.nanoTime();
-            float[][] prob = runDetector(input);
-            double detInferMs = (System.nanoTime() - t2) / 1e6;
-
-            long t3 = System.nanoTime();
-            DebugTrace trace = debugDir == null ? null : new DebugTrace();
-            List<DbPostprocess.Quad> quads =
-                    DbPostprocess.boxesFromBitmap(
-                            prob,
-                            decoded.width(),
-                            decoded.height(),
-                            trace == null ? null : trace.candidates,
-                            SCORE_MODE);
-            if (trace != null) {
-                trace.srcW = decoded.width();
-                trace.srcH = decoded.height();
-                trace.detW = input.w();
-                trace.detH = input.h();
-                trace.scaleX = (double) decoded.width() / prob[0].length;
-                trace.scaleY = (double) decoded.height() / prob.length;
-                trace.prob = prob;
-            }
-            List<double[][]> polys = new ArrayList<>();
-            List<Double> detScores = new ArrayList<>();
-            for (DbPostprocess.Quad q : quads) {
-                polys.add(q.points());
-                detScores.add(q.score());
-            }
-            // Detector order; the final reading order is computed after recognition.
-            List<double[][]> ordered = polys;
-            List<Double> orderedScores = detScores;
-            double detPostMs = (System.nanoTime() - t3) / 1e6;
-
-            double cropMs = 0;
-            double recMs = 0;
-            int n = ordered.size();
-            CtcDecoder.Line[] lines = new CtcDecoder.Line[n];
-            CropOps.Crop[] crops = new CropOps.Crop[n];
-            for (int i = 0; i < n; i++) {
-                double[][] poly = ordered.get(i);
-                long tc = System.nanoTime();
-                crops[i] = CropOps.rotateCrop(decoded.bgr(), decoded.width(), decoded.height(), poly);
-                cropMs += (System.nanoTime() - tc) / 1e6;
-
-                long tr = System.nanoTime();
-                RecPreprocess.RecInput recInput =
-                        RecPreprocess.preprocess(crops[i].bgr(), crops[i].width(), crops[i].height());
-                lines[i] = recognizeCrop(recInput);
-                recMs += (System.nanoTime() - tr) / 1e6;
-            }
-
-            // drop_score filter, then tilt-aware reading order over the kept regions.
-            long ta = System.nanoTime();
-            List<Integer> kept = new ArrayList<>();
-            List<double[][]> keptPolys = new ArrayList<>();
-            for (int i = 0; i < n; i++) {
-                if (lines[i].score() >= DROP_SCORE) {
-                    kept.add(i);
-                    keptPolys.add(ordered.get(i));
-                }
-            }
-            List<OcrResult.TextRegion> regions = new ArrayList<>();
-            StringBuilder combined = new StringBuilder();
-            int[] finalOrder = new int[n];
-            java.util.Arrays.fill(finalOrder, -1);
-            for (List<Integer> displayLine : ReadingOrder.group(keptPolys)) {
-                if (combined.length() > 0) {
-                    combined.append('\n');
-                }
-                boolean first = true;
-                for (int k : displayLine) {
-                    int i = kept.get(k);
-                    double[][] poly = ordered.get(i);
-                    int[] box = {
-                        (int) Math.round(minX(poly)),
-                        (int) Math.round(minY(poly)),
-                        (int) Math.round(maxX(poly)),
-                        (int) Math.round(maxY(poly))
-                    };
-                    finalOrder[i] = regions.size();
-                    regions.add(
-                            new OcrResult.TextRegion(
-                                    copy(poly), box, lines[i].text(), orderedScores.get(i), lines[i].score()));
-                    if (!first) {
-                        combined.append(' ');
-                    }
-                    combined.append(lines[i].text());
-                    first = false;
-                }
-            }
-            if (trace != null) {
-                for (int i = 0; i < n; i++) {
-                    double[][] poly = ordered.get(i);
-                    int candIdx = -1;
-                    for (DbPostprocess.Candidate c : trace.candidates) {
-                        if (c.quad() == poly) {
-                            candIdx = c.index();
-                        }
-                    }
-                    trace.regions.add(
-                            new DebugTrace.RegionTrace(
-                                    "R" + candIdx,
-                                    candIdx,
-                                    finalOrder[i],
-                                    copy(poly),
-                                    orderedScores.get(i),
-                                    crops[i].width(),
-                                    crops[i].height(),
-                                    crops[i].rotated(),
-                                    lines[i].text(),
-                                    lines[i].score(),
-                                    lines[i].score() >= DROP_SCORE,
-                                    crops[i].bgr()));
-                }
-            }
-            double assembleMs = (System.nanoTime() - ta) / 1e6;
-            double totalMs = (System.nanoTime() - start) / 1e6;
-            OcrResult.Timings timings =
-                    new OcrResult.Timings(
-                            decodeMs, detPreMs, detInferMs, detPostMs, cropMs, recMs, assembleMs, totalMs);
-            OcrResult result =
-                    new OcrResult(decoded.width(), decoded.height(), regions, combined.toString(), timings);
-            if (debugDir != null) {
-                DebugImages.write(debugDir, imagePath, decoded, result);
-                trace.finalText = result.combinedText();
-                trace.write(debugDir, imagePath, decoded, DROP_SCORE);
-            }
-            return result;
+            ImageOps.DecodedImage decoded = ImageOps.decode(imagePath);
+            return recognize(decoded.bgr(), decoded.width(), decoded.height(), debugDir, imagePath);
         } catch (java.io.IOException e) {
             throw new OcrException("Could not read image " + imagePath + ": " + e.getMessage(), e);
         }
     }
+
+    /**
+     * Full detector + recognizer pipeline over in-memory BGR bytes
+     * (oriented working-image pixels). Used for full pages and for
+     * user-selected regions alike.
+     */
+    public OcrResult recognize(byte[] bgr, int width, int height, Path debugDir) throws OcrException {
+        return recognize(bgr, width, height, debugDir, null);
+    }
+
+    private OcrResult recognize(
+            byte[] bgr, int width, int height, Path debugDir, Path imagePathForDebug)
+            throws OcrException {
+        long start = System.nanoTime();
+        double decodeMs = 0;
+
+        long t1 = System.nanoTime();
+        DetPreprocess.DetInput input =
+                DetPreprocess.preprocess(bgr, width, height);
+        double detPreMs = (System.nanoTime() - t1) / 1e6;
+
+        long t2 = System.nanoTime();
+        float[][] prob = runDetector(input);
+        double detInferMs = (System.nanoTime() - t2) / 1e6;
+
+        long t3 = System.nanoTime();
+        DebugTrace trace = debugDir == null ? null : new DebugTrace();
+        List<DbPostprocess.Quad> quads =
+                DbPostprocess.boxesFromBitmap(
+                        prob,
+                        width,
+                        height,
+                        trace == null ? null : trace.candidates,
+                        SCORE_MODE);
+        if (trace != null) {
+            trace.srcW = width;
+            trace.srcH = height;
+            trace.detW = input.w();
+            trace.detH = input.h();
+            trace.scaleX = (double) width / prob[0].length;
+            trace.scaleY = (double) height / prob.length;
+            trace.prob = prob;
+        }
+        List<double[][]> polys = new ArrayList<>();
+        List<Double> detScores = new ArrayList<>();
+        for (DbPostprocess.Quad q : quads) {
+            polys.add(q.points());
+            detScores.add(q.score());
+        }
+        // Detector order; the final reading order is computed after recognition.
+        List<double[][]> ordered = polys;
+        List<Double> orderedScores = detScores;
+        double detPostMs = (System.nanoTime() - t3) / 1e6;
+
+        double cropMs = 0;
+        double recMs = 0;
+        int n = ordered.size();
+        CtcDecoder.Line[] lines = new CtcDecoder.Line[n];
+        CropOps.Crop[] crops = new CropOps.Crop[n];
+        for (int i = 0; i < n; i++) {
+            double[][] poly = ordered.get(i);
+            long tc = System.nanoTime();
+            crops[i] = CropOps.rotateCrop(bgr, width, height, poly);
+            cropMs += (System.nanoTime() - tc) / 1e6;
+
+            long tr = System.nanoTime();
+            RecPreprocess.RecInput recInput =
+                    RecPreprocess.preprocess(crops[i].bgr(), crops[i].width(), crops[i].height());
+            lines[i] = recognizeCrop(recInput);
+            recMs += (System.nanoTime() - tr) / 1e6;
+        }
+
+        // drop_score filter, then tilt-aware reading order over the kept regions.
+        long ta = System.nanoTime();
+        List<Integer> kept = new ArrayList<>();
+        List<double[][]> keptPolys = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (lines[i].score() >= DROP_SCORE) {
+                kept.add(i);
+                keptPolys.add(ordered.get(i));
+            }
+        }
+        List<OcrResult.TextRegion> regions = new ArrayList<>();
+        StringBuilder combined = new StringBuilder();
+        int[] finalOrder = new int[n];
+        java.util.Arrays.fill(finalOrder, -1);
+        for (List<Integer> displayLine : ReadingOrder.group(keptPolys)) {
+            if (combined.length() > 0) {
+                combined.append('\n');
+            }
+            boolean first = true;
+            for (int k : displayLine) {
+                int i = kept.get(k);
+                double[][] poly = ordered.get(i);
+                int[] box = {
+                    (int) Math.round(minX(poly)),
+                    (int) Math.round(minY(poly)),
+                    (int) Math.round(maxX(poly)),
+                    (int) Math.round(maxY(poly))
+                };
+                finalOrder[i] = regions.size();
+                regions.add(
+                        new OcrResult.TextRegion(
+                                copy(poly), box, lines[i].text(), orderedScores.get(i), lines[i].score()));
+                if (!first) {
+                    combined.append(' ');
+                }
+                combined.append(lines[i].text());
+                first = false;
+            }
+        }
+        if (trace != null) {
+            for (int i = 0; i < n; i++) {
+                double[][] poly = ordered.get(i);
+                int candIdx = -1;
+                for (DbPostprocess.Candidate c : trace.candidates) {
+                    if (c.quad() == poly) {
+                        candIdx = c.index();
+                    }
+                }
+                trace.regions.add(
+                        new DebugTrace.RegionTrace(
+                                "R" + candIdx,
+                                candIdx,
+                                finalOrder[i],
+                                copy(poly),
+                                orderedScores.get(i),
+                                crops[i].width(),
+                                crops[i].height(),
+                                crops[i].rotated(),
+                                lines[i].text(),
+                                lines[i].score(),
+                                lines[i].score() >= DROP_SCORE,
+                                crops[i].bgr()));
+            }
+        }
+        double assembleMs = (System.nanoTime() - ta) / 1e6;
+        double totalMs = (System.nanoTime() - start) / 1e6;
+        OcrResult.Timings timings =
+                new OcrResult.Timings(
+                        decodeMs, detPreMs, detInferMs, detPostMs, cropMs, recMs, assembleMs, totalMs);
+        OcrResult result =
+                new OcrResult(width, height, regions, combined.toString(), timings);
+        if (debugDir != null) {
+            try {
+                ImageOps.DecodedImage frame = new ImageOps.DecodedImage(bgr, width, height);
+                Path dbgName =
+                        imagePathForDebug != null
+                                ? imagePathForDebug
+                                : java.nio.file.Paths.get("selection.png");
+                DebugImages.write(debugDir, dbgName, frame, result);
+                trace.finalText = result.combinedText();
+                trace.write(debugDir, dbgName, frame, DROP_SCORE);
+            } catch (java.io.IOException e) {
+                throw new OcrException("Could not write debug output: " + e.getMessage(), e);
+            }
+        }
+        return result;
+}
 
     /**
      * Debug helper: runs ONLY the recognizer (no detection) on an image that
@@ -278,10 +300,19 @@ public final class OcrService implements AutoCloseable {
     public CtcDecoder.Line recognizeLineImage(Path cropImage) throws OcrException {
         try {
             ImageOps.DecodedImage d = ImageOps.decode(cropImage);
-            return recognizeCrop(RecPreprocess.preprocess(d.bgr(), d.width(), d.height()));
+            return recognizeLine(d.bgr(), d.width(), d.height());
         } catch (java.io.IOException e) {
             throw new OcrException("Could not read image " + cropImage + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Recognizer-only on in-memory BGR bytes (an already-cropped text line).
+     * Same preprocessing and CTC decoding as the full pipeline; no
+     * drop_score filtering — the raw decode is returned.
+     */
+    public CtcDecoder.Line recognizeLine(byte[] bgr, int width, int height) throws OcrException {
+        return recognizeCrop(RecPreprocess.preprocess(bgr, width, height));
     }
 
     private float[][] runDetector(DetPreprocess.DetInput input) throws OcrException {

@@ -43,6 +43,85 @@ tasks.named('test', Test) {
     useJUnitPlatform()
 }
 
+// JavaFX ships real module-info in the *-linux.jar platform artifacts (the
+// unclassified jars are empty placeholders). The app stays non-modular:
+// JavaFX named modules go on the module path, everything else (app classes,
+// ONNX Runtime, metadata-extractor) stays on the classpath, which may read
+// all named modules. Headless tasks (test/verifyOcrSetup/recognizeImage)
+// keep the plain classpath and never load JavaFX.
+def isJavafxModuleJar = { File f -> f.name ==~ /javafx-(base|graphics|controls)-.*-linux\.jar/ }
+def isJavafxJar = { File f -> f.name ==~ /javafx-.*\.jar/ }
+
+tasks.named('run', JavaExec) {
+    // JavaFX named modules go on the module path (explicit --module-path,
+    // since the unnamed main class needs --add-modules to resolve them);
+    // everything else stays on the classpath, app remains non-modular.
+    classpath = sourceSets.main.runtimeClasspath.filter { !isJavafxJar(it) }
+    doFirst {
+        def mp = sourceSets.main.runtimeClasspath.filter { isJavafxModuleJar(it) }
+                .files*.absolutePath.join(File.pathSeparator)
+        jvmArgs '--module-path', mp, '--add-modules', 'javafx.controls'
+    }
+}
+
+// Same split for the staged/Windows launchers: relocate the JavaFX jars out
+// of the generated CLASSPATH into MODULE_PATH. Patterns are asserted so a
+// future Gradle template change fails loudly instead of silently shipping
+// classpath JavaFX.
+tasks.named('startScripts') {
+    doLast {
+        File unixScript = new File(project.buildDir, 'scripts/notebook-ai')
+        String unix = unixScript.text
+        String updated = relocateJavafx(unix, ':', '$APP_HOME/lib/', '    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )',
+            '        -classpath "$CLASSPATH" \\')
+        unixScript.text = updated
+
+        File bat = new File(project.buildDir, 'scripts/notebook-ai.bat')
+        String win = bat.text
+        String winUpdated = relocateJavafx(win, ';', '%APP_HOME%\\lib\\', null,
+            '-classpath "%CLASSPATH%"')
+        // Preserve the .bat CRLF line endings.
+        bat.bytes = winUpdated.replace('\n', '\r\n').replace('\r\r\n', '\r\n').bytes
+    }
+}
+
+String relocateJavafx(String script, String sep, String libPrefix, String cygpathAnchor, String classpathAnchor) {
+    List<String> moduleJars = ['javafx-base', 'javafx-graphics', 'javafx-controls'].collect { mod ->
+        def m = script =~ /(\Q${libPrefix}\E${mod}-[^:'";\s]*-linux\.jar)/
+        if (!m.find()) {
+            throw new GradleException("startScripts surgery: expected JavaFX module jar for ${mod} not found")
+        }
+        m.group(1)
+    }
+    String script2 = script.replaceAll(/(\Q${libPrefix}\E)javafx-[^:'";\s]*?\.jar[${sep}]/, '')
+    script2 = script2.replaceAll(/[${sep}](\Q${libPrefix}\E)javafx-[^:'";\s]*?\.jar/, '')
+    if (script2.contains('javafx-')) {
+        throw new GradleException('startScripts surgery: leftover JavaFX entry in classpath')
+    }
+    String modulePathLine = (sep == ';' ? 'set MODULE_PATH=' : 'MODULE_PATH=') + moduleJars.join(sep)
+    // Closure form: the parameter is the list of match groups (element 0 is
+    // the whole matched line); this avoids $ group-reference escaping bugs.
+    script2 = script2.replaceFirst(/(?m)^(.*CLASSPATH=.*)$/) { groups -> groups[0] + '\n' + modulePathLine }
+    if (!script2.contains(modulePathLine)) {
+        throw new GradleException('startScripts surgery: CLASSPATH anchor line not found')
+    }
+    if (cygpathAnchor != null) {
+        String cyg = cygpathAnchor + '\n' + '    MODULE_PATH=$( cygpath --path --mixed "$MODULE_PATH" )'
+        if (!script2.contains(cygpathAnchor)) {
+            throw new GradleException('startScripts surgery: cygpath anchor not found')
+        }
+        script2 = script2.replace(cygpathAnchor, cyg)
+    }
+    if (!script2.contains(classpathAnchor)) {
+        throw new GradleException('startScripts surgery: java invocation anchor not found')
+    }
+    String modulesFlag = (sep == ';' ? '"%MODULE_PATH%"' : '"$MODULE_PATH"')
+    String flag = '--module-path ' + modulesFlag + ' --add-modules javafx.controls'
+    // Insert on its own line before the -classpath argument, preserving indentation style.
+    script2 = script2.replace(classpathAnchor, flag + (sep == ';' ? ' ' : ' \\\n        ') + classpathAnchor)
+    return script2
+}
+
 // Phase 0 gate: load + introspect the PaddleOCR ONNX sessions, no inference.
 tasks.register('verifyOcrSetup', JavaExec) {
     group = 'verification'

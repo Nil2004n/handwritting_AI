@@ -15,13 +15,37 @@ LIFE ITSELF IS COMPLICATED
 ## Line 3 (human reading)
 My Name is Debjoy.
 
-## Observed OCR output, 2026-11-21 (PP-OCRv6_small, CPU)
-Region 0 [det=0.603 rec=0.994]: This is how it's done      <- exact
-Region 1 [det=0.743 rec=1.000]: LIFE                        <- line-2 head split off
-Region 2 [det=0.628 rec=0.894]: E ITSELF IS COMPLICATED     <- "LIFE" tail ("FE") read as "E"
-Line 3: no region (missed: large cursive script, diagonal)
+## Observed OCR output, 2026-11-21 rerun (PP-OCRv6_small, CPU, slow scoring)
+4 regions, combined into 3 display lines by tilt-aware grouping:
+Region 0 [det=0.945 rec=0.994]: This is how it's done      <- exact
+Region 1 [det=0.928 rec=1.000]: LIFE                        <- line-2 head split off
+Region 2 [det=0.921 rec=0.913]: ITSELF IS COMPLLCATED        <- "COMPLICATED" with one wrong letter
+Region 3 [det=0.838 rec=0.545]: y Noaw Bedy                 <- cursive line 3, misread (see below)
+Combined:
+This is how it's done
+LIFE ITSELF IS COMPLLCATED
+y Noaw Bedy
+Total 3028 ms on 1800x4000 (detInfer 2037).
+
+## Third-line experiments, 2026-11-21 (all honest outputs, none chosen as truth)
+Manual crop src rect [40,1780]+1400x720 (contains full "My Name is Debjoy"
+plus line-1/line-2 fragments at top — unavoidable axis-aligned):
+- B full pipeline on crop: 3 regions — "don" (line-1 frag) / "TSELF IS
+  ComPLICATE" (line-2 frag) / "My Name is Sebiay" rec=0.908 ("Debjoy"→"Sebiay").
+  Crop dims 1400x720, rec input 3x48x320 (valid width 94).
+- C straightened crop (ImageMagick `-rotate -27`, white fill, 1576x1280):
+  full pipeline finds "don" / "TSELF IS COmpLLATE" / "My Naove is utjiy"
+  rec=0.614. Straightening did NOT fix the cursive misread.
+- D rec-only on the multi-line manual crop: "hi" rec=0.252 — correctly
+  meaningless (multi-line input violates the single-line assumption).
+- D2 rec-only on the pipeline's own auto-crop (1448x465, rec input
+  3x48x320 valid 150): "y Noaw Bedy" rec=0.545, identical to the page run.
+  The auto-crop already straightens via perspective warp, so geometry is
+  not the blocker; the recognizer misreads large cursive script.
 
 ## Verdict
-2 of 3 lines recovered; line 1 character-perfect including the apostrophe.
-Known gaps: word-level line splitting on mixed-case handwriting, and missed
-large cursive ("Debjoy" signature-style). No tuning applied.
+All 3 lines detected; line 1 character-perfect including the apostrophe.
+Known gaps: detector splits mixed-case line 2 (grouped back for display),
+one wrong letter in COMPLICATED, cursive line 3 misread with or without
+straightening (model limit, not pipeline defect). No tuning applied;
+correction happens through the UI transcript editor.

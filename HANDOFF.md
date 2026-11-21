@@ -166,3 +166,55 @@ Changes: `make install` now deletes only the app-owned `<prefix>/lib/notebook-ai
 (path-validated) before copying, so stale jars cannot survive, and warns when another
 `notebook-ai` earlier on PATH shadows the one just installed. The CLI prints, and the UI status
 line shows, a build identity (jar path, models dir, detector score mode).
+
+## Phase 2 (2026-11-21, this commit)
+- JavaFX named-module launch (root cause + fix below); prep (rotate L/R,
+  straighten ±10° slider + apply, reset, crop select/apply/clear) over an
+  explicit working image (original untouched); selection mapping with
+  letterbox inversion + clipping; Recognize Selection (det+rec) and
+  Recognize Line (rec-only) into a separate review area (copy/insert-at-caret,
+  never auto-spliced); region list + image-overlay review (raw text, det/rec
+  scores kept distinct, recognizer-crop thumbnail); verbatim transcript with
+  raw-restore confirmation; background jobs with generation+revision stale
+  guards and mid-job control locks; sessions reused across jobs.
+- Root cause of the startup warning: Gradle's application plugin puts every
+  jar on the classpath, so JavaFX's `module-info` never took effect. Fix:
+  the 3 `*-linux.jar` platform artifacts (the only jars carrying module-info;
+  unclassified JavaFX jars are empty) go on `--module-path` with
+  `--add-modules javafx.controls`; app/ONNX/metadata-extractor stay on the
+  classpath (app remains non-modular). Applied to `run`, staged unix +
+  Windows launchers (asserted surgery with CRLF preserved), installed
+  wrapper inherits it. `Main` prints `javafx.graphics (named module)`; the
+  old warning is gone (JDK 21 runtime is warning-free; JDK 25 adds its own
+  unrelated native-access notes, left alone). CLI/verify stay headless.
+- Handwriting sample A/B/C/D (settings + outputs in
+  samples/transcriptions/handwriting-test.txt): page = 4 regions
+  ("This is how it's done" exact; "LIFE"+"ITSELF IS COMPLLCATED" grouped;
+  "y Noaw Bedy" rec 0.545); manual third-line crop [40,1780]+1400x720 =
+  "don"/"TSELF IS ComPLICATE"/"My Name is Sebiay" (0.908); straightened
+  (-27°) = "don"/"TSELF IS COmpLLATE"/"My Naove is utjiy" (no fix);
+  rec-only on multi-line crops = garbage-as-expected ("hi" 0.252, "福" 0.428);
+  rec-only on the pipeline auto-crop = "y Noaw Bedy" (0.545), identical to
+  page run. Geometry is not the blocker; large cursive misreads persist.
+  Nothing hard-coded, no score-based picking, no new padding heuristic.
+- Tests/builds: `./gradlew clean build` green (45 tests: +13 prep/mapping/
+  stale-guard/verbatim); `verifyOcrSetup` exit 0; CLI smoke on all samples;
+  staged launcher runs headless-safe paths; `make build` + user-local
+  `make install` verified (`type -a` still user-local first; /usr/local
+  untouched — system update command: `sudo make install`).
+- GUI verified live: render, open/preview, page extract (regions + overlay +
+  transcript + raw + identity), straighten-apply, edit-preserves-raw, copy
+  (xclip). Region detail pane observed working (list → raw/scores/crop/
+  buttons + overlay highlight). NOT interactively verified here: mouse
+  drag/click delivery (xdotool button events don't reach this JavaFX app;
+  keyboard does), so selection boxing, crop-apply, region picking,
+  selection/line execution, restore/confirm dialogs are code-reviewed and
+  unit-covered but need a real mouse. Note: this display is shared — an
+  independent live session was observed mid-verification; no files raced
+  (worktree verified clean of foreign edits before commit).
+- Remaining: real-handwriting breadth (1 sample); rotated-quad sort-key
+  caveat stands; CPU-only sequential.
+
+## Commit
+Phase 2 commit on `main` (see `git log`). Models stay git-ignored;
+no push.
