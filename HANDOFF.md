@@ -81,8 +81,13 @@
   (desktop app, runs from Gradle; no installer built).
 
 ## Remaining issues
-1. Real handwriting accuracy UNVERIFIED — no handwriting samples exist;
-   next phase should add some and compare against references.
+1. Real handwriting accuracy MEASURED once (2026-11-21,
+   `samples/handwriting-test.jpg`, now the standard sample — original at
+   `/home/kali/Desktop/test.jpg`): 2/3 lines recovered
+   ("This is how it's done" exact at rec 0.994; "LIFE" split from
+   "E ITSELF IS COMPLICATED"; cursive "My Name is Debjoy." missed).
+   Total 4053 ms on 1800x4000 (detInfer 3030). Broader handwriting coverage
+   still needed; no tuning applied.
 2. Reading order follows upstream `sorted_boxes` on quad point 0; on
    strongly rotated quads the displayed `box` y0 can differ from the sort
    key — same as upstream, by design.

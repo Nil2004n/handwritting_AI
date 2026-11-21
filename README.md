@@ -28,7 +28,11 @@ order. No table/formula/numericals handling.
 ## Current limitations
 - Rendered print English transcribes near-perfectly; the bundled synthetic
   scribbles are not real text (regions found, text meaningless by design).
-  Real handwriting accuracy is unverified — no handwriting samples exist.
+- First real-handwriting measurement (2026-11-21, `samples/handwriting-test.jpg`,
+  phone photo of notebook page): 2 of 3 lines recovered, line 1
+  character-perfect; large cursive missed, one line split. See
+  `samples/transcriptions/handwriting-test.txt`. This file is now the
+  standard real-handwriting test sample — use it for future verification.
 - CPU only, sequential single-image inference, no batching optimization.
 - Debug overlays/crops are opt-in and never written into the source tree.
 

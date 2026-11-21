@@ -1,0 +1,27 @@
+# Handwriting test sample — reference transcription
+# Image: samples/handwriting-test.jpg (1800x4000 JPEG, phone photo of a
+# notebook page, provided by the project owner as the standard real-
+# handwriting test sample; original: /home/kali/Desktop/test.jpg)
+# Blue ballpoint on ruled paper, page photographed rotated (text diagonal).
+# EXIF orientation is applied by the app; coordinates refer to the
+# displayed-orientation image shown here.
+
+## Line 1 (human reading)
+This is how it's done
+
+## Line 2 (human reading)
+LIFE ITSELF IS COMPLICATED
+
+## Line 3 (human reading)
+My Name is Debjoy.
+
+## Observed OCR output, 2026-11-21 (PP-OCRv6_small, CPU)
+Region 0 [det=0.603 rec=0.994]: This is how it's done      <- exact
+Region 1 [det=0.743 rec=1.000]: LIFE                        <- line-2 head split off
+Region 2 [det=0.628 rec=0.894]: E ITSELF IS COMPLICATED     <- "LIFE" tail ("FE") read as "E"
+Line 3: no region (missed: large cursive script, diagonal)
+
+## Verdict
+2 of 3 lines recovered; line 1 character-perfect including the apostrophe.
+Known gaps: word-level line splitting on mixed-case handwriting, and missed
+large cursive ("Debjoy" signature-style). No tuning applied.
