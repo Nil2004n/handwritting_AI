@@ -225,12 +225,15 @@ public final class ImageOps {
     }
 
     /** Keys bicubic kernel with a = -0.75 (OpenCV INTER_CUBIC). */
-    private static double cubic(double x) {
+    static double cubic(double x) {
         x = Math.abs(x);
         double x2 = x * x;
         double x3 = x2 * x;
         if (x <= 1.0) {
-            return 1.5 * x3 - 2.5 * x2 + 1.0;
+            // Keys a = -0.75: (a+2)x^3 - (a+3)x^2 + 1. (The previous 1.5/-2.5 coefficients are the
+            // a = -0.5 form; mixed with the a = -0.75 outer branch the 4 tap weights summed to
+            // 0.94-0.98 at fractional offsets, darkening every interpolated pixel by up to ~12%.)
+            return 1.25 * x3 - 2.25 * x2 + 1.0;
         }
         if (x <= 2.0) {
             return -0.75 * x3 + 3.75 * x2 - 6.0 * x + 3.0;

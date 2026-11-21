@@ -29,8 +29,8 @@ public final class DetPreprocess {
             resizeH = (int) (resizeH * cap);
             resizeW = (int) (resizeW * cap);
         }
-        resizeH = Math.max((int) Math.round(resizeH / 32.0) * 32, 32);
-        resizeW = Math.max((int) Math.round(resizeW / 32.0) * 32, 32);
+        resizeH = Math.max((int) Math.rint(resizeH / 32.0) * 32, 32);
+        resizeW = Math.max((int) Math.rint(resizeW / 32.0) * 32, 32);
         if (resizeW <= 0 || resizeH <= 0) {
             throw new OcrException("Detector resize produced an empty image.");
         }
@@ -54,10 +54,11 @@ public final class DetPreprocess {
 
     /* Package-visible hooks for unit tests. */
 
+    /** Upstream uses Python round(): half to EVEN (Math.rint), not half-up (Math.round). */
     static int[] snap32(int w, int h) {
         return new int[] {
-            Math.max((int) Math.round(w / 32.0) * 32, 32),
-            Math.max((int) Math.round(h / 32.0) * 32, 32)
+            Math.max((int) Math.rint(w / 32.0) * 32, 32),
+            Math.max((int) Math.rint(h / 32.0) * 32, 32)
         };
     }
 
