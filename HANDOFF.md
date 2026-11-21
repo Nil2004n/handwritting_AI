@@ -136,3 +136,22 @@ No root-owned files were left in the repo (the failed run died at startup).
 ## Commit
 Phase 1 commit on `main` (see `git log`). Models stay git-ignored;
 no push.
+
+## Phase 1 correction: tilted handwriting (3 evidence-based deviations)
+Real sample `samples/handwriting-test.jpg` (1800x4000, text tilted ~33 degrees) lost its
+third line, split line 2 into "LIFE" + "E ITSELF...", and mis-ordered lines.
+Root causes (traced with `--debug-dir`, which now also writes `<stem>_trace.txt`,
+`_probmap*.png`, `_regions.png`, `_oriented.png`, and one `_crop_R<cand>.png` per region,
+including regions dropped by drop_score):
+1. Line 3 was detected (candidate with slow score 0.838) but rejected at box_thresh because
+   `score_mode=fast` averages over the whole min-area rectangle (0.341). Now `slow`
+   (upstream-supported mode, contour mean); box_thresh stays 0.45.
+2. The detector split line 2 at a word gap; unclip padding (~0.7x line thickness) of the
+   right region reached over the last letter of the left one (recognizer on the pre-unclip core
+   read no "E"). End padding is now cut back only where it enters a collinear neighbor's core.
+3. `sorted_boxes` (first-corner y) misorders tilted lines. `ReadingOrder` projects regions into
+   the dominant text frame, orders rows/regions there, and joins regions with a space only when
+   the gap is under half a line thickness; region results are never merged or edited.
+Diagnostics: `./gradlew recognizeImage -Pimage=<line-crop.png> -PrecOnly=1` runs the recognizer alone.
+Known limit: the padded crop for the large cursive third line reads poorly (model/crop-context
+limit, not a pipeline defect); the unpadded core crop reads noticeably better.

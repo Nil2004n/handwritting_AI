@@ -17,8 +17,11 @@ public final class RecognizeCli {
     public static void main(String[] args) {
         String imageArg = null;
         String debugDirArg = null;
+        boolean recOnly = false;
         for (int i = 0; i < args.length; i++) {
-            if (args[i].equals("--debug-dir") && i + 1 < args.length) {
+            if (args[i].equals("--rec-only")) {
+                recOnly = true;
+            } else if (args[i].equals("--debug-dir") && i + 1 < args.length) {
                 debugDirArg = args[++i];
             } else if (imageArg == null) {
                 imageArg = args[i];
@@ -31,6 +34,11 @@ public final class RecognizeCli {
         }
         Path projectRoot = Paths.get("").toAbsolutePath();
         try (OcrService service = OcrService.open(projectRoot)) {
+            if (recOnly) { // Recognizer-only on a pre-cropped line image (diagnostics).
+                CtcDecoder.Line line = service.recognizeLineImage(Paths.get(imageArg));
+                System.out.printf("rec-only %s rec=%.3f text=\"%s\"%n", imageArg, line.score(), line.text());
+                return;
+            }
             OcrResult result =
                     debugDirArg == null
                             ? service.recognize(Paths.get(imageArg))

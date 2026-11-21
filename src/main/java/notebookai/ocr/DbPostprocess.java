@@ -35,7 +35,33 @@ import java.util.List;
 public final class DbPostprocess {
 
     /** One scored quad in feature-map coordinates. */
-    public record Quad(double[][] points, double score) {}
+    public record Quad(double[][] points, double score, double[][] core) {
+        public Quad(double[][] points, double score) {
+            this(points, score, null);
+        }
+    }
+
+    /**
+     * Debug-only record of one detector candidate (a connected component of
+     * the thresholded map). Scores here are DETECTOR box scores, never
+     * recognition scores. Coordinates: {@code mini} in feature-map pixels,
+     * {@code quad} in source pixels (null when rejected before unclip).
+     */
+    public record Candidate(
+            int index,
+            int contourPoints,
+            double[][] mini,
+            double miniSide,
+            double detScore,
+            String status,
+            double[][] quad,
+            double slowScore) {}
+
+    /** Upstream {@code score_mode}: FAST = mean over the min-area rect, SLOW = mean over the contour. */
+    public enum ScoreMode {
+        FAST,
+        SLOW
+    }
 
     private DbPostprocess() {}
 
@@ -46,6 +72,12 @@ public final class DbPostprocess {
      * @return scored quads in destination pixel coordinates (double precision)
      */
     public static List<Quad> boxesFromBitmap(float[][] prob, int destW, int destH) {
+        return boxesFromBitmap(prob, destW, destH, null, ScoreMode.FAST);
+    }
+
+    /** Same as above; when {@code trace} is non-null every candidate is recorded with its fate. */
+    public static List<Quad> boxesFromBitmap(
+            float[][] prob, int destW, int destH, List<Candidate> trace, ScoreMode mode) {
         int h = prob.length;
         int w = prob[0].length;
         boolean[][] bitmap = new boolean[h][w];
@@ -61,22 +93,28 @@ public final class DbPostprocess {
             double[][] contour = toPoints(contours.get(i));
             double[][] mini = getMiniBoxes(contour);
             if (mini == null) {
+                record(trace, i, contour, prob, null, 0, -1, "rejected: no min-area box", null);
                 continue;
             }
             double sside = miniSide(mini);
             if (sside < 3) {
+                record(trace, i, contour, prob, mini, sside, -1, "rejected: min_size (<3 on map)", null);
                 continue;
             }
-            double score = boxScoreFast(prob, mini);
+            double score =
+                    mode == ScoreMode.SLOW ? boxScoreSlow(prob, contour) : boxScoreFast(prob, mini);
             if (0.45 > score) {
+                record(trace, i, contour, prob, mini, sside, score, "rejected: box_thresh (<0.45)", null);
                 continue;
             }
             double[][] expanded = unclip(mini, 1.4);
             if (expanded == null) {
+                record(trace, i, contour, prob, mini, sside, score, "rejected: unclip failed", null);
                 continue;
             }
             double[][] mini2 = getMiniBoxes(expanded);
             if (mini2 == null || miniSide(mini2) < 5) {
+                record(trace, i, contour, prob, mini, sside, score, "rejected: min_size after unclip (<5)", null);
                 continue;
             }
             double[][] scaled = new double[4][2];
@@ -84,9 +122,126 @@ public final class DbPostprocess {
                 scaled[k][0] = clip(Math.round(mini2[k][0] / w * destW), 0, destW);
                 scaled[k][1] = clip(Math.round(mini2[k][1] / h * destH), 0, destH);
             }
-            out.add(new Quad(scaled, score));
+            double[][] coreScaled = new double[4][2];
+            for (int k = 0; k < 4; k++) {
+                coreScaled[k][0] = mini[k][0] / w * destW;
+                coreScaled[k][1] = mini[k][1] / h * destH;
+            }
+            out.add(new Quad(scaled, score, coreScaled));
+            record(trace, i, contour, prob, mini, sside, score, "accepted", scaled);
         }
+        trimPaddingIntoNeighborCores(out);
         return out;
+    }
+
+    /**
+     * Unclip pads every side of a box by {@code area*ratio/perimeter}, which
+     * for a text line is ~0.7x its thickness. When the detector splits one
+     * line into two regions, that padding can reach over the neighbor's last
+     * letter, so the same glyph is recognized twice (e.g. "LIFE" and
+     * "E ITSELF"). Here each box's end padding is cut back, along the text
+     * axis only, where it would enter the core (pre-unclip) quad of another
+     * collinear region on the same line band. The core itself and all
+     * non-colliding sides keep the upstream geometry. Boxes are modified in
+     * place so corner order and identity are preserved.
+     */
+    static void trimPaddingIntoNeighborCores(List<Quad> quads) {
+        int n = quads.size();
+        for (int i = 0; i < n; i++) {
+            Quad qi = quads.get(i);
+            if (qi.core() == null) {
+                continue;
+            }
+            double[][] core = qi.core();
+            double[] u = longAxis(core);
+            double[] v = {-u[1], u[0]};
+            double a0 = min(core, u), a1 = max(core, u), b0 = min(core, v), b1 = max(core, v);
+            double[][] e = qi.points();
+            double[] pu = new double[4];
+            for (int k = 0; k < 4; k++) {
+                pu[k] = e[k][0] * u[0] + e[k][1] * u[1];
+            }
+            double bigA0 = Math.min(Math.min(pu[0], pu[1]), Math.min(pu[2], pu[3]));
+            double bigA1 = Math.max(Math.max(pu[0], pu[1]), Math.max(pu[2], pu[3]));
+            double newStart = bigA0;
+            double newEnd = bigA1;
+            for (int j = 0; j < n; j++) {
+                double[][] cj = quads.get(j).core();
+                if (j == i || cj == null) {
+                    continue;
+                }
+                double[] uj = longAxis(cj);
+                if (Math.abs(u[0] * uj[0] + u[1] * uj[1]) < Math.cos(Math.toRadians(15))) {
+                    continue; // Not collinear: different line or orientation.
+                }
+                double c0 = min(cj, v), c1 = max(cj, v);
+                double overlap = Math.min(b1, c1) - Math.max(b0, c0);
+                if (overlap <= 0.25 * Math.min(b1 - b0, c1 - c0)) {
+                    continue; // Different line band.
+                }
+                double j0 = min(cj, u), j1 = max(cj, u);
+                if (j1 > bigA0 && j0 < a0) {
+                    newStart = Math.max(newStart, Math.min(j1, a0));
+                }
+                if (j0 < bigA1 && j1 > a1) {
+                    newEnd = Math.min(newEnd, Math.max(j0, a1));
+                }
+            }
+            if (newStart == bigA0 && newEnd == bigA1) {
+                continue;
+            }
+            for (int k = 0; k < 4; k++) {
+                double target = pu[k] < (bigA0 + bigA1) / 2 ? newStart : newEnd;
+                double shift = target - pu[k];
+                e[k][0] = Math.round(e[k][0] + u[0] * shift);
+                e[k][1] = Math.round(e[k][1] + u[1] * shift);
+            }
+        }
+    }
+
+    /** Unit direction of the longer edge of a quad, pointing toward +x (or +y if vertical). */
+    private static double[] longAxis(double[][] q) {
+        double[] a = {q[1][0] - q[0][0], q[1][1] - q[0][1]};
+        double[] b = {q[3][0] - q[0][0], q[3][1] - q[0][1]};
+        double[] d = Math.hypot(a[0], a[1]) >= Math.hypot(b[0], b[1]) ? a : b;
+        double len = Math.hypot(d[0], d[1]);
+        double[] u = {d[0] / len, d[1] / len};
+        if (u[0] < 0 || (u[0] == 0 && u[1] < 0)) {
+            u[0] = -u[0];
+            u[1] = -u[1];
+        }
+        return u;
+    }
+
+    private static double min(double[][] q, double[] axis) {
+        double m = Double.MAX_VALUE;
+        for (double[] p : q) {
+            m = Math.min(m, p[0] * axis[0] + p[1] * axis[1]);
+        }
+        return m;
+    }
+
+    private static double max(double[][] q, double[] axis) {
+        double m = -Double.MAX_VALUE;
+        for (double[] p : q) {
+            m = Math.max(m, p[0] * axis[0] + p[1] * axis[1]);
+        }
+        return m;
+    }
+
+    private static void record(
+            List<Candidate> trace,
+            int index,
+            double[][] contour,
+            float[][] prob,
+            double[][] mini,
+            double sside,
+            double score,
+            String status,
+            double[][] quad) {
+        if (trace != null) {
+            trace.add(new Candidate(index, contour.length, mini, sside, score, status, quad, boxScoreSlow(prob, contour)));
+        }
     }
 
     private static double clip(double v, double lo, double hi) {
@@ -414,6 +569,38 @@ public final class DbPostprocess {
     // ------------------------------------------------------------------
     // box_score_fast: bbox mean over a scanline-filled mask.
     // ------------------------------------------------------------------
+
+    /** Upstream box_score_slow: mean of the map over the CONTOUR polygon (diagnostic here). */
+    static double boxScoreSlow(float[][] bitmap, double[][] contour) {
+        int h = bitmap.length;
+        int w = bitmap[0].length;
+        double minX = Double.MAX_VALUE, maxX = -1, minY = Double.MAX_VALUE, maxY = -1;
+        for (double[] p : contour) {
+            minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+            minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+        }
+        int xmin = (int) clip(Math.floor(minX), 0, w - 1);
+        int xmax = (int) clip(Math.ceil(maxX), 0, w - 1);
+        int ymin = (int) clip(Math.floor(minY), 0, h - 1);
+        int ymax = (int) clip(Math.ceil(maxY), 0, h - 1);
+        double[][] b = new double[contour.length][2];
+        for (int i = 0; i < b.length; i++) {
+            b[i][0] = contour[i][0] - xmin;
+            b[i][1] = contour[i][1] - ymin;
+        }
+        boolean[][] mask = fillPoly(b, xmax - xmin + 1, ymax - ymin + 1);
+        double sum = 0;
+        int count = 0;
+        for (int y = ymin; y <= ymax; y++) {
+            for (int x = xmin; x <= xmax; x++) {
+                if (mask[y - ymin][x - xmin]) {
+                    sum += bitmap[y][x];
+                    count++;
+                }
+            }
+        }
+        return count == 0 ? 0.0 : sum / count;
+    }
 
     static double boxScoreFast(float[][] bitmap, double[][] box) {
         int h = bitmap.length;

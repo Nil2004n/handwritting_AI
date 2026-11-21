@@ -39,7 +39,7 @@ public final class CropOps {
     }
 
     /** Perspective-cropped text line (BGR bytes) with its output size. */
-    public record Crop(byte[] bgr, int width, int height) {}
+    public record Crop(byte[] bgr, int width, int height, boolean rotated) {}
 
     /**
      * Warps the quad (TL/TR/BR/BL) to an upright rectangle via perspective
@@ -56,6 +56,7 @@ public final class CropOps {
         if (cropW <= 0 || cropH <= 0) {
             throw new OcrException("Degenerate crop region.");
         }
+        final int h0 = cropH;
         byte[] warped = ImageOps.warpQuadBicubic(img, imgW, imgH, points, cropW, cropH);
         int w = cropW;
         int h = cropH;
@@ -65,7 +66,7 @@ public final class CropOps {
             w = h;
             h = t;
         }
-        return new Crop(warped, w, h);
+        return new Crop(warped, w, h, h0 != h);
     }
 
     private static double norm(double[] a, double[] b) {
