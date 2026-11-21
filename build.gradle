@@ -183,3 +183,17 @@ tasks.register('ctcProbe', JavaExec) {
         args '--debug-dir', project.property('debugDir')
     }
 }
+
+// Phase 3c diagnostic: export per-stage data for the independent reference cross-check (tools/xcheck).
+tasks.register('crossCheckDump', JavaExec) {
+    group = 'verification'
+    description = 'Dump stage data: -PevalManifest=cases.tsv -PoutDir=DIR.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookai.ocr.CrossCheckDump'
+    if (project.hasProperty('evalManifest')) {
+        args '--manifest', project.property('evalManifest')
+    }
+    if (project.hasProperty('outDir')) {
+        args '--out', project.property('outDir')
+    }
+}

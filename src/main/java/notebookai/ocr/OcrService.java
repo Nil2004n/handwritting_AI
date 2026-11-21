@@ -316,7 +316,7 @@ public final class OcrService implements AutoCloseable {
         return recognizeCrop(RecPreprocess.preprocess(bgr, width, height));
     }
 
-    private float[][] runDetector(DetPreprocess.DetInput input) throws OcrException {
+    float[][] runDetector(DetPreprocess.DetInput input) throws OcrException {
         Map<String, OnnxTensor> inputs = new HashMap<>();
         FloatBuffer buffer = FloatBuffer.wrap(input.chw());
         try (OnnxTensor tensor =
@@ -423,7 +423,7 @@ public final class OcrService implements AutoCloseable {
     }
 
     /** Sessions in use (read-only view for tests/diagnostics). */
-    List<String> decodeTable() {
+    public List<String> decodeTable() {
         return Collections.unmodifiableList(decodeTable);
     }
 
