@@ -1,4 +1,4 @@
-# notebook-ai (Java desktop, Phase 2 — image review + OCR)
+# notebook-ai (Java desktop — projects, pages, review + OCR, text export)
 
 Offline handwritten-text OCR: open an image → prepare (rotate/straighten/crop)
 → extract real text → review regions → edit → copy. Pure Java 21, JavaFX UI,
@@ -18,6 +18,28 @@ no network at runtime.
   verbatim CER/WER + line structure + timings per case. Private cases go
   in `eval-local/cases.tsv` (same format, git-ignored, never committed).
 - `./gradlew clean build` — compiles + runs the JUnit suite.
+
+## Projects, pages and export (Phase 4)
+- A **project** is an ordered list of **pages**. **Add Images…** (multi-select) adds JPG/PNG files as
+  pages; it never replaces the project. Each page keeps its own preparation (rotate/straighten/crop),
+  raw OCR, regions, and edited transcript. Switch pages in the left list; **Remove** (with
+  confirmation) and **▲/▼** reorder. Only the active page is decoded in memory.
+- **Project → New / Open… / Save / Save As…** use one portable file, `.nbai` (a ZIP: `project.json`
+  + the ORIGINAL image bytes of every page). Reopening never depends on the source image files.
+  Saving writes a temporary sibling file, re-validates it, then renames it over the target, so a
+  failed save keeps the previous file; opening is all-or-nothing (a corrupt file never replaces
+  the open project). Format details and limits: HANDOFF.md "Phase 4".
+- The title shows `*` and the status line says UNSAVED CHANGES after page import/removal/reordering,
+  image preparation, OCR results and transcript edits. Navigating, copying and selecting regions
+  do not. New/Open/Quit ask Save / Discard / Cancel when there are unsaved changes.
+- While an OCR job, import or open runs, switching pages and New/Open are locked and every OCR
+  result is checked against its project, page and image state before it is stored.
+- **Export → Current Page / All Pages as Text…** writes the CURRENT reviewed transcripts verbatim
+  as UTF-8 (no BOM). All pages: project order, one blank line between pages (page labels only if you
+  tick the option). Unrecognized or empty pages contribute empty text and are listed in a warning.
+- **Privacy:** a `.nbai` file contains your full images and your text, and exports contain your
+  text. Treat them as private; they are never written anywhere you did not choose, and `*.nbai`
+  is git-ignored in this repository.
 
 ## Image preparation and coordinates
 - Rotate left/right (90° steps), straighten slider (±10°) + Apply, reset

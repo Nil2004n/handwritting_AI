@@ -15,3 +15,8 @@ eval-local/
 # Python bytecode from tools/xcheck
 __pycache__/
 *.pyc
+
+# User projects and local exports contain private images/text: never commit them.
+*.nbai
+projects-local/
+exports-local/

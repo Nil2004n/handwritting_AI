@@ -637,3 +637,113 @@ It cannot be removed without rewriting history, which was not done.
 Commands: `./gradlew clean build verifyOcrSetup`; `./gradlew evaluate -PevalManifest=eval/cases.tsv` (and `eval-local/cases.tsv`);
 `./gradlew ctcProbe -PevalManifest=M` (per-region output and crop hashes); cross-check: `crossCheckDump` + `tools/xcheck/*.py`
 (see Phase 3c/3d); candidate trial: see Phase 3e.
+
+## Phase 4: persistent projects, multiple pages, text export (2026-11-22)
+Starting checkpoint verified: `main` = `origin/main` = `5fb6e8f`, clean tree. No roadmap document defines Phase 4 (HANDOFF/README
+only describe Phases 0-3), so the scope below is the agreed scope. OCR models, decoding, preprocessing and defaults are untouched.
+
+### Scope (agreed)
+Create/save/open a project; import several images as pages; prepare and recognize each page; edit text with raw OCR preserved;
+save, close and reopen without losing anything; export the reviewed text. No batch OCR, no PDF/DOCX export, no autosave, no
+automatic correction of any kind.
+
+### Where state lived before (and now)
+Page-level: working image (decoded original + prep state), rendered view, regions, raw OCR, edited transcript, selection/crop draft.
+Project-level: OCR sessions, job lock/generation. Before: one image, original file not retained, job guard = (generation, image
+revision) only. Now: `PageData` owns the original bytes, prep state, raw/edited text, recognized flag, regions and OCR identity;
+`ProjectData` is the ordered page list; `ProjectSession` holds the active project, its path, dirty state and an epoch; only the ACTIVE
+page is decoded (inactive pages are compressed bytes + a small thumbnail).
+
+### Project file format (`.nbai`, format version 1)
+ZIP archive, written/read with `java.util.zip` (no new dependency, no native deserialization). Exactly these entries:
+- `project.json` (UTF-8, strict JSON via the in-repo `MiniJson`; duplicate keys, trailing data, raw control chars, depth > 64 rejected;
+  unpaired surrogates are escaped so any Java string round-trips exactly). Fields: `format`="notebook-ai-project",
+  `formatVersion`=1, `writtenBy`, `projectId`, `pages[]`.
+- `pages/<pageId>/original`, one per page = the ORIGINAL JPEG/PNG bytes (stored uncompressed in the zip).
+Page object: `id` (stable UUID), `name` (file name only), `image` (entry), `imageFormat`, `imageBytes`, `imageSha256`, `prep`
+{`quarterTurnsCw`, `fineDegrees`, `crop`|null}, `recognized` (bool), `rawText` (null iff not recognized; "" = recognized, no text),
+`editedText`, `ocrIdentity` (model name + det/rec sha256 prefixes + score mode + drop score + any experiment; no paths),
+`regionsPrepKey`, `regions[]` (polygon, box, text, detScore, recScore).
+The WORKING image is not stored: it is regenerated from original + prep by the same deterministic code (rotate steps, straighten,
+crop). Region overlays are persisted and restored only if their prep key matches; otherwise they are dropped with a visible notice
+("Extract again to inspect regions") and never shown stale. Selection rectangles, crop drafts, selected region, review results and
+running jobs are transient: never saved, never an edit.
+No secrets, models or absolute paths are written (the test suite asserts the JSON contains no absolute path).
+
+### Safe persistence
+Save/Save As: temp sibling in the target folder (default-umask permissions; existing target permissions are preserved), fsync of the
+file, re-read + full validation (hashes, structure, page ids) of what was written, then atomic rename over the target (non-atomic
+`REPLACE_EXISTING` fallback where atomic move is unsupported). Any failure deletes the temp file and keeps the previous valid file.
+Limitation: the containing directory is not fsynced and OS crash/power loss during the rename is outside what this guarantees; this is
+not crash-durable storage. Open: everything is parsed and validated first; the active project is replaced only on full success
+(`ProjectSession.open`/`adopt`). Validation: entry names must match a fixed pattern, no duplicates/directories/extras/orphans, every
+referenced image present with matching size and SHA-256, JPEG/PNG magic, header-only pixel-count check (no decode), schema checks
+(types, ranges, prep, recognized/raw consistency). Nothing is extracted to disk. Unsupported versions give "written by a newer
+version (format vN; this version reads up to v1)". Bounds: 500 pages, 64 MiB per image, 32 MiB `project.json`, 2 GiB total
+expanded, 120 megapixels per image, 10,000 regions per page (also enforced when saving).
+
+### Workflow and policies
+- **Add Images…** (multi-select) always ADDS pages (replaces the old "Open Image…"); New/Open replace the project. Invalid files are
+  skipped with a per-file reason; valid ones are added.
+- Policy during an OCR job, import or project open: page switching, add/remove/reorder, New and Open are LOCKED; Save and Export stay
+  available (they read a consistent snapshot). Independently every OCR result carries a `JobTicket` (project epoch, page id, image
+  prep revision, job generation) and is applied by page id only if all still match, so a result can never land on another page/project.
+- Dirty tracking (`DirtyTracker`): meaningful changes (import/remove/reorder, prep, OCR results, transcript edits) mark the project
+  unsaved; navigation, copy, region selection, export do not; programmatic refreshes are guarded by `loadingPage`. Saves are
+  asynchronous from a snapshot; only the snapshot's revision is marked saved, so edits made during a save stay unsaved.
+  New/Open/Quit offer Save / Discard / Cancel; Cancel, a cancelled Save As or a failed save never proceed.
+- Prep changes still clear the page's OCR results and transcript (with the existing confirmation when it has edits), now per page.
+
+### Text export
+UTF-8, no BOM, via temp file + rename (permissions as above), rejecting text that cannot be encoded rather than altering it.
+Current page: its edited text, verbatim. All pages: project order, exactly one blank line (`\n\n`) between consecutive pages, always
+(so positions are preserved); optional `--- Page N ---` labels only when ticked. Unrecognized pages and recognized-but-empty pages
+contribute empty text and are listed in a warning before export. Export never changes the project or its saved state. Overwrite
+confirmation is the native chooser's; cancel and write failures leave an existing file unchanged.
+
+### Privacy
+A `.nbai` contains full user images and text; exports contain text. `*.nbai`, `projects-local/`, `exports-local/` are git-ignored.
+No private images/transcriptions were added; tests use generated images. GUI test data lived in a disposable folder and was deleted.
+
+### Automated tests (112 total, all green; 41 new)
+`MiniJsonTest` (exact string round trip incl. lone surrogates, malformed input, depth), `ProjectStoreTest` (multi-page round trip with
+exact Unicode/CRLF/trailing-space text, images, prep, regions, order and stable ids, recognized-empty vs unrecognized, owned images
+and no absolute paths, failed save keeps previous file and removes the temp, invalid content, failed open leaves session unchanged,
+corrupt/truncated/empty files, missing/bad JSON, bad UTF-8, wrong format, newer/invalid versions, unsafe/duplicate/orphan entries,
+tampered image, invalid prep/state, stale-region drop, pixel bomb at save and load, too many entries/pages, oversized JSON, bytes
+decode == file decode), `ProjectWorkflowTest` (dirty transitions incl. edit-during-save, session epoch and snapshot independence,
+open swap-on-success, page order/identity, `JobTicket` acceptance matrix, raw vs edited, action locking, export order/separators/
+labels/warnings/verbatim UTF-8/no BOM/failure cases, permissions, permission-error wording). Not tested for size: the 64 MiB / 2 GiB
+byte bounds are enforced in code but exercised only through the 32 MiB JSON, entry-count and pixel limits.
+
+### Installed-GUI acceptance (real mouse/keyboard on a private Xvfb against the `~/.local` build, jar `93006246b8a2` = staged)
+Performed and passed: add 2 images in one multi-select; prepare page 1 (rotate) and page 2 (crop) differently and switch; extract
+each; edit each (incl. `é`) and switch back and forth with independent state; Copy Text (clipboard compared); Restore Raw (page-
+local); reorder and Export All (order, separator, UTF-8 bytes); Export Current incl. overwrite Cancel/Replace and a read-only-folder
+failure; export warnings for an unrecognized page and the opt-in labels; Save (Untitled -> Save As), title/`*` transitions; no dirty
+on navigation/copy/region select/selection rectangle; unsaved dialog Cancel; Discard; Save-then-proceed and a cancelled Save As not
+proceeding; Save As to a second file (first file byte-identical); failed save (read-only folder: clear message, `*` remains, no temp
+file); failed open (corrupt file: actionable message, project unchanged); quit with unsaved changes (Discard); reopen after the source
+folder was moved (pages, order, prep, regions, thumbnails, exact text; stored originals byte-identical to the source files); remove
+page (Cancel / OK, then dirty); mid-OCR lock (page list, Add/Extract/prep disabled, New/Open disabled, click on another page had no
+effect) with the result landing on the page it started on (approved fixture photo: baseline transcript).
+Fixes found by that pass (all re-verified): temp files were owner-only (now umask/existing permissions), status/controls stayed
+greyed behind failure dialogs, raw I/O messages for permission errors and missing import files.
+NOT exercised in the GUI: straighten and region click/copy/insert on the new multi-page screens (code paths unchanged from Phase 2,
+covered there and by unit tests), an actual OCR result racing a page switch (prevented by the lock; the ticket logic is unit-tested
+only), edits typed while an asynchronous save is in flight (unit-tested only), closing the window while an OCR job runs, and very
+large projects (hundreds of pages / near the byte limits).
+
+### Regression
+Default pipeline unchanged: repo photo CER 12/67 WER 5/13; private photo CER 5/91 WER 3/18; rendered print exact (verified by running
+the manifests). `verifyOcrSetup` ok. Installed identity: the status line shows `~/.local/lib/notebook-ai/lib/notebook-ai-0.1.0.jar`.
+
+### Build note
+`build/install` had been created root-owned (by an earlier `sudo make install` run), which made `gradlew clean` fail for the unprivileged
+user. It was renamed aside to `build-old-rootowned/` (excluded via `.git/info/exclude`, nothing deleted); remove it with
+`sudo rm -rf build-old-rootowned` if desired. Avoid running `make install` as root after a root-owned `build/` appears.
+
+### Remaining gaps
+No crash-durability guarantee; no autosave; no batch OCR; no PDF/DOCX; no multi-user locking of a project file; no undo of page
+removal beyond not saving; thumbnails are regenerated on open (a render per page); project files can be large (all original images).
+Phase 4 status: **Accepted** (required acceptance checks passed; unverified paths are listed above).
