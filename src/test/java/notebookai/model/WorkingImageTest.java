@@ -87,6 +87,51 @@ class WorkingImageTest {
     }
 
     @Test
+    void rotateOrStraightenClearsAStaleCropButResetRestoresOriginal() {
+        WorkingImage img = new WorkingImage(gray(100, 80, 9), 100, 80);
+        img.setCrop(new int[] {10, 10, 60, 50});
+        int rev = img.revision();
+        img.rotateSteps(1);
+        assertFalse(img.hasCrop(), "crop rect belongs to the old frame");
+        assertEquals(80, img.render().width());
+        assertEquals(100, img.render().height());
+        assertTrue(img.revision() > rev);
+        img.setCrop(new int[] {0, 0, 40, 40});
+        img.setStraighten(2.0);
+        assertFalse(img.hasCrop());
+        img.setCrop(new int[] {0, 0, 40, 40});
+        img.reset();
+        WorkingImage.Rendered r = img.render();
+        assertEquals(100, r.width());
+        assertEquals(80, r.height());
+        assertEquals(0, img.quarterTurnsCw());
+        assertEquals(0.0, img.fineDegrees(), 0.0);
+    }
+
+    @Test
+    void everyWorkingImageMutationInvalidatesAnInFlightJob() {
+        // A job captures (generation, revision) at start; the UI applies its result only if
+        // WorkingImage.isCurrentJob(...) still holds. Each real mutator must break that.
+        Runnable[] mutations = new Runnable[4];
+        WorkingImage img = new WorkingImage(gray(100, 80, 9), 100, 80);
+        mutations[0] = () -> img.rotateSteps(1);
+        mutations[1] = () -> img.setStraighten(1.5);
+        mutations[2] = () -> img.setCrop(new int[] {5, 5, 50, 50});
+        mutations[3] = img::reset;
+        for (Runnable mutate : mutations) {
+            int gen = 7;
+            int jobRev = img.revision();
+            assertTrue(WorkingImage.isCurrentJob(gen, 7, jobRev, img.revision()));
+            mutate.run(); // user changes the image while the job is "running"
+            assertFalse(
+                    WorkingImage.isCurrentJob(gen, 7, jobRev, img.revision()),
+                    "stale result must be discarded after a working-image change");
+        }
+        // A newer job started after this one also supersedes it.
+        assertFalse(WorkingImage.isCurrentJob(7, 8, img.revision(), img.revision()));
+    }
+
+    @Test
     void displayMappingAccountsForLetterbox() {
         // 200x100 image in a 200x200 fit box: scale 1, 50px bars top/bottom.
         Optional<double[]> center = WorkingImage.mapDisplayToWorking(100, 100, 200, 200, 200, 100);

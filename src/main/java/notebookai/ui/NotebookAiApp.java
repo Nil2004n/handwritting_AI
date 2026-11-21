@@ -300,11 +300,13 @@ public class NotebookAiApp extends Application {
         if (userEdited && !transcript.getText().isEmpty() && !confirmDiscard()) {
             return;
         }
+        boolean hadCrop = working.hasCrop();
         mutation.run();
         clearResults();
         userEdited = false;
         refreshPreview();
-        statusLabel.setText("Working image updated (" + what + "). Previous results cleared.");
+        statusLabel.setText("Working image updated (" + what + "). Previous results cleared."
+                + (hadCrop && !working.hasCrop() ? " Crop cleared (it applied to the previous orientation)." : ""));
     }
 
     private boolean confirmDiscard() {

@@ -65,12 +65,14 @@ public final class WorkingImage {
     /** Rotate 90 degrees; positive steps are clockwise. */
     public void rotateSteps(int stepsCw) {
         quarterTurnsCw = Math.floorMod(quarterTurnsCw + stepsCw, 4);
+        crop = null; // The crop rect lives in the previous rotated frame; it would hit a different area.
         revision++;
     }
 
     /** Straightening angle in degrees, clamped to [-10, +10]. */
     public void setStraighten(double degrees) {
         fineDegrees = Math.max(-MAX_STRAIGHTEN_DEG, Math.min(MAX_STRAIGHTEN_DEG, degrees));
+        crop = null; // Same reason as rotateSteps: the crop was defined on the pre-change frame.
         revision++;
     }
 
