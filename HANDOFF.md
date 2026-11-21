@@ -218,3 +218,35 @@ line shows, a build identity (jar path, models dir, detector score mode).
 ## Commit
 Phase 2 commit on `main` (see `git log`). Models stay git-ignored;
 no push.
+
+## Phase 2 UI/OCR verification pass (after d85dbd4 was pushed)
+Input: `~/Desktop/test.jpg`, sha256 `acc880a8b518c316...`, 4000x1800, EXIF 0 (4 written lines + signature,
+text runs top-to-bottom). The reported output reproduces exactly with one **Left** rotation:
+`./gradlew recognizeImage -Pimage=$HOME/Desktop/test.jpg -Protate=3 [-PdebugDir=DIR]`
+(`-Protate`/`-Pstraighten` use the same `WorkingImage` as the UI).
+GUI was driven on a private Xvfb (`:77`) with xdotool + xclip against the installed `~/.local` build (jar sha
+compared with staged), because another agent shares display `:0` and closed my window there.
+
+Defects found (real GUI) and fixed:
+1. **Channel order**: `ImageOps.decode` returned RGB bytes labelled BGR (`Raster.getDataElements` is band order).
+   Preview/region thumbnails had red/blue swapped and the detector saw non-upstream channel order. Now true BGR
+   (test `decodeReturnsTrueBgrChannelOrder`). OCR effect: mixed on real handwriting (old sample line 3 closer; new
+   image `ITSIELF`/`dehjay` vs `ITSELF`/`debjay`), identical on rendered print, different pseudo-text on the
+   synthetic scribble samples. A correctness fix, not an accuracy cure.
+2. **Recognize Selection/Line stayed disabled** after drawing a selection (enable state only recomputed after jobs).
+   Now `ControlState` (pure, unit-tested) applied by `updateControls()` after every state change.
+3. **Layout**: transcript squeezed to ~2 rows, raw pane off-screen -> scroll pane, shorter fixed areas.
+4. **"progress." on its own line**: a real newline from grouping (gap 86px vs padded thickness 159/84; source is one
+   line). Word-gap rule is now `0.6 x taller neighbor` (`ReadingOrder.WORD_GAP`); column gaps still split.
+5. **Selection OCR used its own newline join**; now uses `OcrResult.combinedText()` like page extraction.
+
+Verified in the real GUI: open, Left/Right, straighten, crop draft/apply/clear, reset, Extract Page (+ edit-confirm
+Cancel/OK), region select by list (overlay/detail/thumbnail), Copy Text / Copy Region / Copy Selection (clipboard
+contents read with xclip and compared), Insert at Caret (region + selection), Restore Raw Cancel/OK,
+Recognize Line, Recognize Selection.
+NOT verified interactively: job-failure state, mid-job stale-result discard (unit-covered only), region pick by
+clicking on the image, combined crop+rotate+reset, the system-wide `/usr/local` copy (sudo needs a password).
+
+Character errors (model limits, not pipeline): `COMPLLOATED` is read identically from every manual crop of line 2
+(tight, +10/25/50/80px pad, word-only); `Debjoy` is unstable with padding (`Debjay`, `debjay`, `dehjay`, `Sebjon`).
+Auto crops were clean (no neighbor leakage). No replacement rules were added.

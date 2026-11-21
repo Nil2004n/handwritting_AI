@@ -18,9 +18,15 @@ public final class RecognizeCli {
         String imageArg = null;
         String debugDirArg = null;
         boolean recOnly = false;
+        int rotateCw = 0;
+        double straighten = 0;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--rec-only")) {
                 recOnly = true;
+            } else if (args[i].equals("--rotate") && i + 1 < args.length) {
+                rotateCw = Integer.parseInt(args[++i]); // quarter turns clockwise, as the UI's Left/Right
+            } else if (args[i].equals("--straighten") && i + 1 < args.length) {
+                straighten = Double.parseDouble(args[++i]);
             } else if (args[i].equals("--debug-dir") && i + 1 < args.length) {
                 debugDirArg = args[++i];
             } else if (imageArg == null) {
@@ -39,10 +45,22 @@ public final class RecognizeCli {
                 System.out.printf("rec-only %s rec=%.3f text=\"%s\"%n", imageArg, line.score(), line.text());
                 return;
             }
-            OcrResult result =
-                    debugDirArg == null
-                            ? service.recognize(Paths.get(imageArg))
-                            : service.recognize(Paths.get(imageArg), Paths.get(debugDirArg));
+            Path debugDir = debugDirArg == null ? null : Paths.get(debugDirArg);
+            OcrResult result;
+            if (rotateCw == 0 && straighten == 0) {
+                result = service.recognize(Paths.get(imageArg), debugDir);
+            } else {
+                // Same working-image path as the UI (rotate/straighten, then page OCR).
+                ImageOps.DecodedImage d = ImageOps.decode(Paths.get(imageArg));
+                notebookai.model.WorkingImage wi =
+                        new notebookai.model.WorkingImage(d.bgr(), d.width(), d.height());
+                wi.rotateSteps(rotateCw);
+                wi.setStraighten(straighten);
+                notebookai.model.WorkingImage.Rendered r = wi.render();
+                System.out.printf("Working image: rotate=%d cw quarter-turn(s), straighten=%.1f deg -> %dx%d%n",
+                        rotateCw, straighten, r.width(), r.height());
+                result = service.recognize(r.bgr(), r.width(), r.height(), debugDir);
+            }
             System.out.println(service.identity());
             System.out.println("Image: " + imageArg);
             System.out.println("Size: " + result.imageWidth() + "x" + result.imageHeight());
@@ -72,6 +90,9 @@ public final class RecognizeCli {
                     t.cropMs(),
                     t.recMs(),
                     t.totalMs());
+        } catch (java.io.IOException e) {
+            System.err.println("Recognition FAILED: " + e.getMessage());
+            System.exit(1);
         } catch (OcrException e) {
             System.err.println("Recognition FAILED: " + e.getMessage());
             System.exit(1);

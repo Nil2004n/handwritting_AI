@@ -163,4 +163,36 @@ class DetectionRegressionTest {
         // topLeft/topRight are 400px apart (>> thickness) so they stay separate lines, in x order.
         assertEquals(List.of(List.of(2), List.of(1), List.of(0)), lines);
     }
+
+    @Test
+    void shortFragmentBesideTallBoxJoinsAcrossAWordGapButWideColumnsDoNot() {
+        // Real-sample shape: a tall box (padded thickness ~160) then a short fragment box
+        // (~84 thick) after an 86px word gap on the same line. Gap > 0.5*min but < 0.6*max.
+        double[][] tall = {{0, 0}, {800, 0}, {800, 160}, {0, 160}};
+        double[][] shortFrag = {{886, 40}, {1278, 40}, {1278, 124}, {886, 124}};
+        assertEquals(List.of(List.of(0, 1)), ReadingOrder.group(List.of(tall, shortFrag)));
+        // A column gap of ~3 line thicknesses stays a separate display line.
+        double[][] farColumn = {{2000, 40}, {2392, 40}, {2392, 124}, {2000, 124}};
+        assertEquals(List.of(List.of(0), List.of(1)), ReadingOrder.group(List.of(tall, farColumn)));
+    }
+
+    @Test
+    void decodeReturnsTrueBgrChannelOrder() throws Exception {
+        java.awt.image.BufferedImage img =
+                new java.awt.image.BufferedImage(2, 1, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        img.setRGB(0, 0, 0xFF0000); // pure red
+        img.setRGB(1, 0, 0x0000FF); // pure blue
+        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("chan", ".png");
+        try {
+            javax.imageio.ImageIO.write(img, "png", tmp.toFile());
+            byte[] bgr = ImageOps.decode(tmp).bgr();
+            assertEquals(0, bgr[0] & 0xFF, "red pixel: B");
+            assertEquals(0, bgr[1] & 0xFF, "red pixel: G");
+            assertEquals(255, bgr[2] & 0xFF, "red pixel: R is the LAST byte in BGR");
+            assertEquals(255, bgr[3] & 0xFF, "blue pixel: B is the FIRST byte in BGR");
+            assertEquals(0, bgr[5] & 0xFF);
+        } finally {
+            java.nio.file.Files.deleteIfExists(tmp);
+        }
+    }
 }

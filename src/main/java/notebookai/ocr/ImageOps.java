@@ -54,8 +54,33 @@ public final class ImageOps {
         int w = img.getWidth();
         int h = img.getHeight();
         byte[] bgr = new byte[w * h * 3];
+        // Raster.getDataElements returns bytes in BAND order, which for
+        // TYPE_3BYTE_BGR is R,G,B (not the B,G,R memory order). Swap so the
+        // buffer really is BGR like cv2.imread: the detector's ImageNet
+        // mean/std are applied per channel in that order, and the UI preview
+        // reads it as BGR.
         img.getRaster().getDataElements(0, 0, w, h, bgr);
+        for (int i = 0; i < bgr.length; i += 3) {
+            byte r = bgr[i];
+            bgr[i] = bgr[i + 2];
+            bgr[i + 2] = r;
+        }
         return new DecodedImage(bgr, w, h);
+    }
+
+    /** Converts a true-BGR byte buffer to a BufferedImage (for debug PNGs). */
+    public static BufferedImage toBufferedImage(byte[] bgr, int w, int h) {
+        int[] argb = new int[w * h];
+        for (int i = 0; i < w * h; i++) {
+            argb[i] =
+                    0xFF000000
+                            | ((bgr[i * 3 + 2] & 0xFF) << 16)
+                            | ((bgr[i * 3 + 1] & 0xFF) << 8)
+                            | (bgr[i * 3] & 0xFF);
+        }
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        img.setRGB(0, 0, w, h, argb, 0, w);
+        return img;
     }
 
     private static BufferedImage toBgr(BufferedImage img) {

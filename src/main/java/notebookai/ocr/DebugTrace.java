@@ -163,9 +163,7 @@ final class DebugTrace {
     }
 
     static BufferedImage toBuffered(byte[] bgr, int w, int h) {
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR);
-        img.getRaster().setDataElements(0, 0, w, h, bgr);
-        return img;
+        return ImageOps.toBufferedImage(bgr, w, h);
     }
 
     private static String stem(Path path) {

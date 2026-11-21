@@ -18,6 +18,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextArea;
@@ -33,6 +34,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import notebookai.model.ControlState;
 import notebookai.model.ModelConfig;
 import notebookai.model.OcrResult;
 import notebookai.model.WorkingImage;
@@ -59,7 +61,7 @@ import notebookai.ocr.OcrService;
 public class NotebookAiApp extends Application {
 
     private static final double FIT_W = 560;
-    private static final double FIT_H = 480;
+    private static final double FIT_H = 360;
 
     private Label statusLabel;
     private Label identityLabel;
@@ -158,9 +160,8 @@ public class NotebookAiApp extends Application {
         clearSelectionButton.setOnAction(e -> {
             selection = null;
             cropDraft = null;
-            applyCropButton.setDisable(true);
-            clearSelectionButton.setDisable(true);
             drawOverlay(null);
+            updateControls();
         });
         copyButton = new Button("Copy Text");
         copyButton.setDisable(true);
@@ -184,18 +185,18 @@ public class NotebookAiApp extends Application {
         previewPane.setMaxSize(FIT_W, FIT_H);
 
         regionList = new ListView<>();
-        regionList.setPrefHeight(180);
+        regionList.setPrefHeight(120);
         regionList.getSelectionModel().selectedIndexProperty().addListener(
                 (obs, o, v) -> selectRegion(v.intValue()));
         regionRaw = new TextArea();
         regionRaw.setEditable(false);
         regionRaw.setWrapText(true);
-        regionRaw.setPrefRowCount(3);
+        regionRaw.setPrefRowCount(2);
         regionScores = new Label("No region selected.");
         cropThumb = new ImageView();
         cropThumb.setPreserveRatio(true);
         cropThumb.setFitWidth(260);
-        cropThumb.setFitHeight(80);
+        cropThumb.setFitHeight(64);
         copyRegionButton = new Button("Copy Region");
         copyRegionButton.setDisable(true);
         copyRegionButton.setOnAction(e -> copyRegionText());
@@ -213,7 +214,7 @@ public class NotebookAiApp extends Application {
         selectionOutput = new TextArea();
         selectionOutput.setEditable(false);
         selectionOutput.setWrapText(true);
-        selectionOutput.setPrefRowCount(3);
+        selectionOutput.setPrefRowCount(2);
         selectionTiming = new Label("");
         copySelectionButton = new Button("Copy Selection");
         copySelectionButton.setDisable(true);
@@ -227,7 +228,10 @@ public class NotebookAiApp extends Application {
         transcript = new TextArea();
         transcript.setWrapText(true);
         transcript.setPrefRowCount(6);
-        transcript.textProperty().addListener((obs, old, val) -> userEdited = true);
+        transcript.textProperty().addListener((obs, old, val) -> {
+            userEdited = true;
+            updateControls();
+        });
 
         Label rawLabel = new Label("Raw OCR output (read-only):");
         rawOutput = new TextArea();
@@ -242,9 +246,13 @@ public class NotebookAiApp extends Application {
         VBox.setVgrow(transcript, Priority.ALWAYS);
 
         stage.setTitle("notebook-ai");
-        stage.setScene(new Scene(root, 1000, 900));
+        transcript.setMinHeight(110);
+        rawOutput.setMinHeight(80);
+        ScrollPane scroll = new ScrollPane(root);
+        scroll.setFitToWidth(true);
+        stage.setScene(new Scene(scroll, 1000, 880));
         stage.show();
-        setControlsEnabled(false);
+        updateControls();
     }
 
     // ------------------------------------------------------------------
@@ -282,7 +290,7 @@ public class NotebookAiApp extends Application {
         userEdited = false;
         refreshPreview();
         statusLabel.setText("Image loaded: " + file.getName());
-        setControlsEnabled(true);
+        updateControls();
     }
 
     private void mutateWorking(String what, Runnable mutation) {
@@ -317,7 +325,6 @@ public class NotebookAiApp extends Application {
         }
         working.setCrop(cropDraft);
         cropDraft = null;
-        applyCropButton.setDisable(true);
         clearResults();
         userEdited = false;
         refreshPreview();
@@ -340,14 +347,7 @@ public class NotebookAiApp extends Application {
         selectionOutput.clear();
         selectionKind.setText("Selection: none (drag on the preview, or enable Crop mode).");
         selectionTiming.setText("");
-        copyButton.setDisable(true);
-        copyRegionButton.setDisable(true);
-        insertRegionButton.setDisable(true);
-        copySelectionButton.setDisable(true);
-        insertSelectionButton.setDisable(true);
-        restoreButton.setDisable(true);
-        applyCropButton.setDisable(true);
-        clearSelectionButton.setDisable(true);
+        updateControls();
     }
 
     // ------------------------------------------------------------------
@@ -510,17 +510,15 @@ public class NotebookAiApp extends Application {
         }
         if (cropMode.isSelected()) {
             cropDraft = clipped.get();
-            applyCropButton.setDisable(false);
-            clearSelectionButton.setDisable(false);
             statusLabel.setText("Crop drafted — Apply Crop to commit, Clear to drop it.");
         } else {
             selection = clipped.get();
             selectedRegion = -1;
             regionList.getSelectionModel().clearSelection();
-            clearSelectionButton.setDisable(false);
             statusLabel.setText("Selection ready — Recognize Selection or Recognize Line.");
         }
         drawOverlay(null);
+        updateControls();
     }
 
     private double[] clampDisplay(double mx, double my) {
@@ -554,8 +552,6 @@ public class NotebookAiApp extends Application {
             regionRaw.clear();
             regionScores.setText("No region selected.");
             cropThumb.setImage(null);
-            copyRegionButton.setDisable(true);
-            insertRegionButton.setDisable(true);
         } else {
             OcrResult.TextRegion r = regions.get(index);
             regionRaw.setText(r.text());
@@ -564,10 +560,9 @@ public class NotebookAiApp extends Application {
             int[] box = r.box();
             byte[] cut = WorkingImage.cropBytes(rendered.bgr(), rendered.width(), rendered.height(), box);
             cropThumb.setImage(toFxImage(cut, box[2] - box[0], box[3] - box[1]));
-            copyRegionButton.setDisable(r.text().isEmpty());
-            insertRegionButton.setDisable(r.text().isEmpty());
         }
         drawOverlay(null);
+        updateControls();
     }
 
     private String selectedRegionText() {
@@ -605,8 +600,6 @@ public class NotebookAiApp extends Application {
             rawOutput.setText(lastRawText.isEmpty() ? "(no text recognized)" : lastRawText);
             transcript.setText(lastRawText);
             userEdited = false;
-            copyButton.setDisable(lastRawText.isEmpty());
-            restoreButton.setDisable(lastRawText.isEmpty());
             try {
                 lastIdentity = service().identity();
             } catch (OcrException ignored) {
@@ -638,19 +631,14 @@ public class NotebookAiApp extends Application {
                 return new SelResult(kind, line.text(), line.score(), -1, cw, ch, crop);
             }
             OcrResult r = svc.recognize(crop, cw, ch, null);
-            StringBuilder sb = new StringBuilder();
-            for (OcrResult.TextRegion t : r.regions()) {
-                if (sb.length() > 0) {
-                    sb.append('\n');
-                }
-                sb.append(t.text());
-            }
+            // Same assembly as page extraction (reading order + word-gap grouping).
+            String assembled = r.combinedText();
             double best = 0;
             for (OcrResult.TextRegion t : r.regions()) {
                 best = Math.max(best, t.recScore());
             }
             return new SelResult(kind + " — " + r.regions().size() + " region(s)",
-                    sb.toString(), best, r.timings().totalMs(), cw, ch, crop);
+                    assembled, best, r.timings().totalMs(), cw, ch, crop);
         }, result -> {
             selectionText = result.text;
             selectionKind.setText(result.kind + (result.text.isEmpty() ? " (no text)" : ""));
@@ -658,8 +646,6 @@ public class NotebookAiApp extends Application {
             String time = result.totalMs < 0 ? "" : Math.round(result.totalMs) + " ms total. ";
             selectionTiming.setText(time + String.format("rec=%.3f, crop %dx%d",
                     result.score, result.cw, result.ch));
-            copySelectionButton.setDisable(result.text.isEmpty());
-            insertSelectionButton.setDisable(result.text.isEmpty());
             statusLabel.setText("Selection done: " + (result.text.isEmpty() ? "no text." : result.text.length() + " chars."));
         });
     }
@@ -671,7 +657,7 @@ public class NotebookAiApp extends Application {
         int gen = ++jobGen;
         int rev = working.revision();
         jobRunning = true;
-        setControlsEnabled(false);
+        updateControls();
         statusLabel.setText(busyText);
         Thread worker = new Thread(() -> {
             T result;
@@ -689,16 +675,17 @@ public class NotebookAiApp extends Application {
             String err = error;
             Platform.runLater(() -> {
                 jobRunning = false;
-                setControlsEnabled(working != null);
-                if (!WorkingImage.isCurrentJob(gen, jobGen, rev, working.revision())) {
-                    statusLabel.setText("Ignored stale result (image changed mid-job).");
-                    return;
+                try {
+                    if (!WorkingImage.isCurrentJob(gen, jobGen, rev, working.revision())) {
+                        statusLabel.setText("Ignored stale result (image changed mid-job).");
+                    } else if (err != null) {
+                        statusLabel.setText("Failed: " + err);
+                    } else {
+                        onDone.accept(done);
+                    }
+                } finally {
+                    updateControls(); // After onDone so it sees the new results.
                 }
-                if (err != null) {
-                    statusLabel.setText("Failed: " + err);
-                    return;
-                }
-                onDone.accept(done);
             });
         });
         worker.setDaemon(true);
@@ -722,21 +709,38 @@ public class NotebookAiApp extends Application {
         return choice.isPresent() && choice.get() == ButtonType.OK;
     }
 
-    private void setControlsEnabled(boolean hasImage) {
-        openButton.setDisable(jobRunning);
-        extractButton.setDisable(jobRunning || !hasImage);
-        recognizeButton.setDisable(jobRunning || !hasImage || selection == null);
-        recognizeLineButton.setDisable(jobRunning || !hasImage || selection == null);
-        rotLeftButton.setDisable(jobRunning || !hasImage);
-        rotRightButton.setDisable(jobRunning || !hasImage);
-        straightenSlider.setDisable(jobRunning || !hasImage);
-        straightenApply.setDisable(jobRunning || !hasImage);
-        resetButton.setDisable(jobRunning || !hasImage);
-        cropMode.setDisable(jobRunning || !hasImage);
-        applyCropButton.setDisable(jobRunning || cropDraft == null);
-        clearSelectionButton.setDisable(jobRunning || (selection == null && cropDraft == null));
-        copyButton.setDisable(lastRawText.isEmpty());
-        restoreButton.setDisable(jobRunning || lastRawText.isEmpty());
+    /** Re-applies every button's enabled state from current fields (single source of truth). */
+    private void updateControls() {
+        if (openButton == null || transcript == null || insertSelectionButton == null) {
+            return; // Window not fully built yet.
+        }
+        ControlState c = ControlState.compute(
+                working != null,
+                jobRunning,
+                selection != null,
+                cropDraft != null,
+                !transcript.getText().isEmpty(),
+                !lastRawText.isEmpty(),
+                !selectionText.isEmpty(),
+                !selectedRegionText().isEmpty());
+        openButton.setDisable(!c.open());
+        extractButton.setDisable(!c.extract());
+        recognizeButton.setDisable(!c.recognizeSelection());
+        recognizeLineButton.setDisable(!c.recognizeLine());
+        rotLeftButton.setDisable(!c.prep());
+        rotRightButton.setDisable(!c.prep());
+        straightenSlider.setDisable(!c.prep());
+        straightenApply.setDisable(!c.prep());
+        resetButton.setDisable(!c.prep());
+        cropMode.setDisable(!c.cropMode());
+        applyCropButton.setDisable(!c.applyCrop());
+        clearSelectionButton.setDisable(!c.clearSelection());
+        copyButton.setDisable(!c.copyTranscript());
+        restoreButton.setDisable(!c.restoreRaw());
+        copySelectionButton.setDisable(!c.copySelection());
+        insertSelectionButton.setDisable(!c.copySelection());
+        copyRegionButton.setDisable(!c.regionActions());
+        insertRegionButton.setDisable(!c.regionActions());
     }
 
     // ------------------------------------------------------------------

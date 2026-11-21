@@ -142,6 +142,12 @@ tasks.register('recognizeImage', JavaExec) {
     if (project.hasProperty('debugDir')) {
         args '--debug-dir', project.property('debugDir')
     }
+    if (project.hasProperty('rotate')) {
+        args '--rotate', project.property('rotate')
+    }
+    if (project.hasProperty('straighten')) {
+        args '--straighten', project.property('straighten')
+    }
     if (project.hasProperty('recOnly')) {
         args '--rec-only' // diagnostics: recognizer only, image is a pre-cropped line
     }

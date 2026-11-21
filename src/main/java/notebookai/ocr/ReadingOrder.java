@@ -20,6 +20,17 @@ import java.util.List;
  */
 public final class ReadingOrder {
 
+    /**
+     * A gap up to this fraction of the TALLER neighbor's padded thickness is a
+     * word gap inside one written line. Padded thickness is ~2.4x the text
+     * height (unclip adds ~0.7x per side), so 0.6 is ~1.4 text heights. The
+     * taller box is used because a short fragment box (e.g. a word with no
+     * ascenders) under-reports the line height; measured on the real sample, a
+     * word gap of 86px beside boxes of 159px and 84px was wrongly split by the
+     * previous min-based half-thickness rule.
+     */
+    static final double WORD_GAP = 0.6;
+
     private ReadingOrder() {}
 
     /** Display lines in reading order; each entry lists region indices left-to-right. */
@@ -84,7 +95,7 @@ public final class ReadingOrder {
             List<Integer> current = new ArrayList<>();
             int prev = -1;
             for (int i : r) {
-                if (prev >= 0 && u0[i] - u1[prev] > 0.5 * Math.min(thick[i], thick[prev])) {
+                if (prev >= 0 && u0[i] - u1[prev] > WORD_GAP * Math.max(thick[i], thick[prev])) {
                     lines.add(current);
                     current = new ArrayList<>();
                 }
