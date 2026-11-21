@@ -41,6 +41,43 @@ public final class WorkingImage {
         this.oh = height;
     }
 
+    /**
+     * Rebuilds the working image from the original plus saved preparation, applying the operations
+     * in the only order the UI can produce them: 90-degree turns, then straighten, then crop (a
+     * turn or straighten clears any crop, so a persisted crop always postdates them).
+     */
+    public static WorkingImage restore(byte[] originalBgr, int width, int height, int quarterTurnsCw,
+            double fineDegrees, int[] crop) {
+        WorkingImage w = new WorkingImage(originalBgr, width, height);
+        w.rotateSteps(quarterTurnsCw);
+        if (fineDegrees != 0) {
+            w.setStraighten(fineDegrees);
+        }
+        if (crop != null) {
+            w.setCrop(crop);
+        }
+        return w;
+    }
+
+    /** Size of the rotated/straightened frame (before any crop), computed exactly as {@link #render()} does. */
+    public static int[] frameSize(int width, int height, int quarterTurnsCw, double fineDegrees) {
+        int w = width;
+        int h = height;
+        if (Math.floorMod(quarterTurnsCw, 4) % 2 == 1) {
+            w = height;
+            h = width;
+        }
+        if (fineDegrees != 0) {
+            double theta = Math.toRadians(fineDegrees);
+            double cos = Math.cos(theta);
+            double sin = Math.sin(theta);
+            int nw = Math.max((int) Math.ceil(Math.abs(w * cos) + Math.abs(h * sin)), 1);
+            int nh = Math.max((int) Math.ceil(Math.abs(w * sin) + Math.abs(h * cos)), 1);
+            return new int[] {nw, nh};
+        }
+        return new int[] {w, h};
+    }
+
     public int revision() {
         return revision;
     }

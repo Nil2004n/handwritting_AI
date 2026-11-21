@@ -116,6 +116,11 @@ public final class PageData {
         this.regions = new ArrayList<>(regionList);
     }
 
+    /** Drops region geometry only (text is kept): used when saved geometry cannot be trusted. */
+    public void dropRegions() {
+        this.regions = new ArrayList<>();
+    }
+
     /** Back to the explicit "not recognized" state (used when the prepared image changes). */
     public void clearRecognition() {
         this.recognized = false;

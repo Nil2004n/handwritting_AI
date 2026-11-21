@@ -62,6 +62,30 @@ public final class ProjectStore {
     public static final int MAX_REGIONS_PER_PAGE = 10_000;
     public static final int MAX_NAME_CHARS = 255;
 
+    /**
+     * Resource limits. What each measures:
+     * <ul>
+     *   <li>{@code maxImageBytes}: size of ONE page's original image file as stored in the archive
+     *       (== its entry's uncompressed size; images are stored uncompressed);</li>
+     *   <li>{@code maxJsonBytes}: expanded size of {@code project.json} (all text, regions, metadata);</li>
+     *   <li>{@code maxTotalBytes}: the archive file's size on disk AND the sum of expanded bytes read
+     *       (json + all images), checked while reading, so a lying size header cannot bypass it;</li>
+     *   <li>{@code maxPixels}: width x height from the image HEADER (nothing is decoded before this check);
+     *       decoding additionally passes {@link MemoryGuard};</li>
+     *   <li>{@code maxPages}, {@code maxRegionsPerPage}: counts.</li>
+     * </ul>
+     * Configurable so tests can exercise exact boundaries with tiny limits.
+     */
+    public record Limits(int maxPages, long maxImageBytes, long maxJsonBytes, long maxTotalBytes,
+            long maxPixels, int maxRegionsPerPage) {
+        public static final Limits DEFAULT = new Limits(MAX_PAGES, MAX_IMAGE_BYTES, MAX_JSON_BYTES,
+                MAX_TOTAL_BYTES, MAX_PIXELS, MAX_REGIONS_PER_PAGE);
+    }
+
+    private static String fmt(long bytes) {
+        return bytes >= (1L << 20) ? (bytes >> 20) + " MiB" : bytes + " bytes";
+    }
+
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
     private static final Pattern IMAGE_ENTRY = Pattern.compile("pages/([A-Za-z0-9_-]{1,64})/original");
     private static final String JSON_ENTRY = "project.json";
@@ -72,14 +96,24 @@ public final class ProjectStore {
 
     /** Saves {@code project} to {@code target} safely (see class comment). */
     public static void save(ProjectData project, Path target) throws ProjectException {
-        save(project, target, null);
+        save(project, target, Limits.DEFAULT, null);
+    }
+
+    /** Saves with explicit limits (tests, tooling). */
+    public static void save(ProjectData project, Path target, Limits lim) throws ProjectException {
+        save(project, target, lim, null);
     }
 
     /** Test hook: {@code beforeCommit} runs after the temp file is written+validated, before the rename. */
     static void save(ProjectData project, Path target, FailureInjector beforeCommit)
             throws ProjectException {
-        if (project.size() > MAX_PAGES) {
-            throw new ProjectException("A project can hold at most " + MAX_PAGES + " pages.");
+        save(project, target, Limits.DEFAULT, beforeCommit);
+    }
+
+    static void save(ProjectData project, Path target, Limits lim, FailureInjector beforeCommit)
+            throws ProjectException {
+        if (project.size() > lim.maxPages()) {
+            throw new ProjectException("A project can hold at most " + lim.maxPages() + " pages.");
         }
         Path abs = target.toAbsolutePath();
         Path dir = abs.getParent();
@@ -94,13 +128,13 @@ public final class ProjectStore {
         try {
             tmp = AtomicFiles.createTemp(dir, abs, ".nbai-save-");
             try (OutputStream out = Files.newOutputStream(tmp, StandardOpenOption.WRITE)) {
-                writeArchive(project, out);
+                writeArchive(project, out, lim);
             }
             try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.WRITE)) {
                 ch.force(true);
             }
             // Re-read and validate what was actually written before it can replace anything.
-            ProjectData check = read(tmp, false);
+            ProjectData check = read(tmp, false, lim);
             if (check.size() != project.size()) {
                 throw new ProjectException("Verification failed: page count mismatch after writing.");
             }
@@ -143,7 +177,7 @@ public final class ProjectStore {
         void run() throws IOException;
     }
 
-    private static void writeArchive(ProjectData project, OutputStream raw) throws IOException, ProjectException {
+    private static void writeArchive(ProjectData project, OutputStream raw, Limits lim) throws IOException, ProjectException {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("format", FORMAT_NAME);
         root.put("formatVersion", (long) FORMAT_VERSION);
@@ -159,9 +193,9 @@ public final class ProjectStore {
             if (fmt == null) {
                 throw new ProjectException("Page \"" + p.name() + "\" is not a JPEG or PNG image.");
             }
-            if (p.original().length > MAX_IMAGE_BYTES) {
+            if (p.original().length > lim.maxImageBytes()) {
                 throw new ProjectException("Page \"" + p.name() + "\" is larger than "
-                        + (MAX_IMAGE_BYTES >> 20) + " MiB.");
+                        + (lim.maxImageBytes() >> 20) + " MiB.");
             }
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id());
@@ -220,8 +254,8 @@ public final class ProjectStore {
         } catch (MiniJson.JsonException e) {
             throw new ProjectException("Could not encode the project: " + e.getMessage());
         }
-        if (json.length > MAX_JSON_BYTES) {
-            throw new ProjectException("The project's text data is larger than " + (MAX_JSON_BYTES >> 20) + " MiB.");
+        if (json.length > lim.maxJsonBytes()) {
+            throw new ProjectException("The project's text data is larger than " + (lim.maxJsonBytes() >> 20) + " MiB.");
         }
         try (ZipOutputStream zos = new ZipOutputStream(raw)) {
             zos.setLevel(Deflater.DEFAULT_COMPRESSION);
@@ -241,10 +275,15 @@ public final class ProjectStore {
 
     /** Reads and fully validates a project file. Never throws unchecked exceptions for bad input. */
     public static ProjectData load(Path file) throws ProjectException {
-        return read(file, true);
+        return read(file, true, Limits.DEFAULT);
     }
 
-    private static ProjectData read(Path file, boolean retainImages) throws ProjectException {
+    /** Loads with explicit limits (tests, tooling). */
+    public static ProjectData load(Path file, Limits lim) throws ProjectException {
+        return read(file, true, lim);
+    }
+
+    private static ProjectData read(Path file, boolean retainImages, Limits lim) throws ProjectException {
         String label = file.getFileName() == null ? file.toString() : file.getFileName().toString();
         if (!Files.exists(file)) {
             throw new ProjectException("Cannot open " + label + ": the file does not exist.");
@@ -253,14 +292,14 @@ public final class ProjectStore {
             throw new ProjectException("Cannot open " + label + ": it is not a regular file.");
         }
         try {
-            if (Files.size(file) > MAX_TOTAL_BYTES) {
+            if (Files.size(file) > lim.maxTotalBytes()) {
                 throw new ProjectException("Cannot open " + label + ": the file is larger than the supported limit.");
             }
         } catch (IOException e) {
             throw new ProjectException("Cannot read " + label + ": " + describe(e), e);
         }
         try (ZipFile zf = new ZipFile(file.toFile())) {
-            return readZip(zf, label, retainImages);
+            return readZip(zf, label, retainImages, lim);
         } catch (java.util.zip.ZipException e) {
             throw new ProjectException(label + " is not a valid notebook-ai project (the archive is corrupt or "
                     + "incomplete: " + describe(e) + ").", e);
@@ -271,7 +310,7 @@ public final class ProjectStore {
         }
     }
 
-    private static ProjectData readZip(ZipFile zf, String label, boolean retain) throws IOException, ProjectException {
+    private static ProjectData readZip(ZipFile zf, String label, boolean retain, Limits lim) throws IOException, ProjectException {
         // --- entry-name validation: fixed pattern, no duplicates, no extras, bounded count
         Set<String> names = new HashSet<>();
         int count = 0;
@@ -279,8 +318,8 @@ public final class ProjectStore {
         while (en.hasMoreElements()) {
             ZipEntry e = en.nextElement();
             count++;
-            if (count > MAX_PAGES + 1) {
-                throw bad(label, "it contains too many entries (limit " + (MAX_PAGES + 1) + ")");
+            if (count > lim.maxPages() + 1) {
+                throw bad(label, "it contains too many entries (limit " + (lim.maxPages() + 1) + ")");
             }
             String n = e.getName();
             if (e.isDirectory() || n.length() > 200) {
@@ -297,7 +336,7 @@ public final class ProjectStore {
             throw bad(label, "project.json is missing");
         }
         ZipEntry jsonEntry = zf.getEntry(JSON_ENTRY);
-        byte[] jsonBytes = readBounded(zf.getInputStream(jsonEntry), MAX_JSON_BYTES, null, "project.json", label);
+        byte[] jsonBytes = readBounded(zf.getInputStream(jsonEntry), lim.maxJsonBytes(), null, "project.json", label);
         String text;
         try {
             text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -330,8 +369,8 @@ public final class ProjectStore {
             throw bad(label, "projectId is invalid");
         }
         List<Object> pageList = list(root.get("pages"), "pages", label);
-        if (pageList.size() > MAX_PAGES) {
-            throw bad(label, "it has more than " + MAX_PAGES + " pages");
+        if (pageList.size() > lim.maxPages()) {
+            throw bad(label, "it has more than " + lim.maxPages() + " pages");
         }
         ProjectData project = new ProjectData(projectId);
         Set<String> referenced = new HashSet<>();
@@ -356,13 +395,13 @@ public final class ProjectStore {
             String sha = str(pm, "imageSha256", label, 64);
             long declared = lng(pm, "imageBytes", label);
             ZipEntry ie = zf.getEntry(image);
-            if (ie.getSize() > MAX_IMAGE_BYTES) {
-                throw bad(label, "the image for page " + id + " exceeds the " + (MAX_IMAGE_BYTES >> 20) + " MiB limit");
+            if (ie.getSize() > lim.maxImageBytes()) {
+                throw bad(label, "the image for page " + id + " exceeds the " + fmt(lim.maxImageBytes()) + " limit");
             }
             MessageDigest md = sha256();
-            byte[] img = readBounded(zf.getInputStream(ie), MAX_IMAGE_BYTES, md, "image of page " + id, label);
+            byte[] img = readBounded(zf.getInputStream(ie), lim.maxImageBytes(), md, "image of page " + id, label);
             total[0] += img.length;
-            if (total[0] > MAX_TOTAL_BYTES) {
+            if (total[0] > lim.maxTotalBytes()) {
                 throw bad(label, "the expanded size exceeds the supported limit");
             }
             if (img.length != declared) {
@@ -378,8 +417,8 @@ public final class ProjectStore {
             if (dim == null || dim[0] <= 0 || dim[1] <= 0) {
                 throw bad(label, "the image for page " + id + " is unreadable");
             }
-            if ((long) dim[0] * dim[1] > MAX_PIXELS) {
-                throw bad(label, "the image for page " + id + " is larger than " + (MAX_PIXELS / 1_000_000)
+            if ((long) dim[0] * dim[1] > lim.maxPixels()) {
+                throw bad(label, "the image for page " + id + " is larger than " + (lim.maxPixels() / 1_000_000)
                         + " megapixels");
             }
             PageData page = new PageData(id, name, retain ? img : new byte[0], sha);
@@ -425,7 +464,7 @@ public final class ProjectStore {
             if (!recognized && !regList.isEmpty()) {
                 throw bad(label, "page " + id + " has regions but is not recognized");
             }
-            if (regList.size() > MAX_REGIONS_PER_PAGE) {
+            if (regList.size() > lim.maxRegionsPerPage()) {
                 throw bad(label, "page " + id + " has too many regions");
             }
             for (Object ro : regList) {
@@ -494,7 +533,7 @@ public final class ProjectStore {
             while ((r = is.read(buf)) > 0) {
                 n += r;
                 if (n > limit) {
-                    throw bad(label, what + " exceeds the " + (limit >> 20) + " MiB limit");
+                    throw bad(label, what + " exceeds the " + fmt(limit) + " limit");
                 }
                 if (md != null) {
                     md.update(buf, 0, r);
