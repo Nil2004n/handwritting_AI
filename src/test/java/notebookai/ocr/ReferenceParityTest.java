@@ -57,4 +57,46 @@ class ReferenceParityTest {
         assertEquals(1792, DetPreprocess.snap32(1800, 1800)[0]); // 56.25 -> 56 (unchanged behavior)
         assertEquals(4000, DetPreprocess.snap32(4000, 4000)[1]);
     }
+
+    @Test
+    void coordinateScalingRoundsHalfToEvenLikeNumpy() {
+        assertEquals(2.0, DbPostprocess.scaleCoord(2.5, 10, 10)); // np.round(2.5) == 2
+        assertEquals(4.0, DbPostprocess.scaleCoord(3.5, 10, 10)); // np.round(3.5) == 4
+        assertEquals(0.0, DbPostprocess.scaleCoord(0.5, 10, 10)); // np.round(0.5) == 0
+        assertEquals(3.0, DbPostprocess.scaleCoord(2.6, 10, 10));
+    }
+
+    @Test
+    void straightenRotationPreservesUniformInteriorAndTexturedMeanBrightness() throws Exception {
+        int w = 80;
+        int h = 60;
+        byte[] flat = new byte[w * h * 3];
+        Arrays.fill(flat, (byte) 150);
+        ImageOps.Rotated r = ImageOps.rotateBicubic(flat, w, h, 7.0);
+        int cx = r.width() / 2;
+        int cy = r.height() / 2;
+        for (int dy = -10; dy <= 10; dy++) {
+            for (int dx = -10; dx <= 10; dx++) {
+                assertEquals(150, r.bgr()[((cy + dy) * r.width() + cx + dx) * 3] & 0xFF);
+            }
+        }
+        // Textured image: the mean must not drift (the old kernel lost ~5% brightness on tilted samples).
+        byte[] tex = new byte[w * h * 3];
+        java.util.Random rnd = new java.util.Random(7);
+        double sum = 0;
+        for (int i = 0; i < tex.length; i++) {
+            int v = 100 + rnd.nextInt(100);
+            tex[i] = (byte) v;
+            sum += v;
+        }
+        double srcMean = sum / tex.length;
+        double[][] quad = {{10, 8}, {70, 20}, {66, 44}, {8, 34}};
+        byte[] crop = ImageOps.warpQuadBicubic(tex, w, h, quad, 60, 24);
+        double cs = 0;
+        for (byte b : crop) {
+            cs += b & 0xFF;
+        }
+        assertTrue(Math.abs(cs / crop.length - srcMean) < 0.015 * srcMean,
+                "tilted crop mean " + cs / crop.length + " vs source " + srcMean);
+    }
 }

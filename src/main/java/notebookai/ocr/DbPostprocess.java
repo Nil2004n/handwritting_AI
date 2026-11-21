@@ -78,6 +78,12 @@ public final class DbPostprocess {
     /** Same as above; when {@code trace} is non-null every candidate is recorded with its fate. */
     public static List<Quad> boxesFromBitmap(
             float[][] prob, int destW, int destH, List<Candidate> trace, ScoreMode mode) {
+        return boxesFromBitmap(prob, destW, destH, trace, mode, true);
+    }
+
+    /** {@code trim=false} (diagnostics only) skips the neighbor-padding trim to expose upstream-equivalent quads. */
+    static List<Quad> boxesFromBitmap(
+            float[][] prob, int destW, int destH, List<Candidate> trace, ScoreMode mode, boolean trim) {
         int h = prob.length;
         int w = prob[0].length;
         boolean[][] bitmap = new boolean[h][w];
@@ -119,8 +125,8 @@ public final class DbPostprocess {
             }
             double[][] scaled = new double[4][2];
             for (int k = 0; k < 4; k++) {
-                scaled[k][0] = clip(Math.round(mini2[k][0] / w * destW), 0, destW);
-                scaled[k][1] = clip(Math.round(mini2[k][1] / h * destH), 0, destH);
+                scaled[k][0] = clip(scaleCoord(mini2[k][0], w, destW), 0, destW);
+                scaled[k][1] = clip(scaleCoord(mini2[k][1], h, destH), 0, destH);
             }
             double[][] coreScaled = new double[4][2];
             for (int k = 0; k < 4; k++) {
@@ -130,7 +136,9 @@ public final class DbPostprocess {
             out.add(new Quad(scaled, score, coreScaled));
             record(trace, i, contour, prob, mini, sside, score, "accepted", scaled);
         }
-        trimPaddingIntoNeighborCores(out);
+        if (trim) {
+            trimPaddingIntoNeighborCores(out);
+        }
         return out;
     }
 
@@ -242,6 +250,11 @@ public final class DbPostprocess {
         if (trace != null) {
             trace.add(new Candidate(index, contour.length, mini, sside, score, status, quad, boxScoreSlow(prob, contour)));
         }
+    }
+
+    /** Map -> source coordinate with upstream's np.round (half to EVEN), not Math.round (half up). */
+    static double scaleCoord(double v, int mapSize, int destSize) {
+        return Math.rint(v / mapSize * destSize);
     }
 
     private static double clip(double v, double lo, double hi) {

@@ -75,6 +75,8 @@ public final class CrossCheckDump {
         writeFloats(dir.resolve("det_prob.f32"), flat);
         meta.append("det_prob=").append(prob.length).append(',').append(prob[0].length).append('\n');
 
+        dumpDetectorStages(prob, r.width(), r.height(), dir);
+
         // Single detector pass (a second full-size run exhausts RAM): regions come from the SAME
         // probability map through the production postprocess, in detector order.
         List<DbPostprocess.Quad> quads =
@@ -113,5 +115,67 @@ public final class CrossCheckDump {
         ByteBuffer bb = ByteBuffer.allocate(a.length * 4).order(ByteOrder.LITTLE_ENDIAN);
         bb.asFloatBuffer().put(a);
         Files.write(p, bb.array());
+    }
+
+    /** Detector post-processing stage data (contours, candidates, boxes) for tools/xcheck/xcheck_det.py. */
+    private static void dumpDetectorStages(float[][] prob, int w, int h, Path dir) throws IOException {
+        int mh = prob.length;
+        int mw = prob[0].length;
+        boolean[][] bitmap = new boolean[mh][mw];
+        long on = 0;
+        for (int y = 0; y < mh; y++) {
+            for (int x = 0; x < mw; x++) {
+                bitmap[y][x] = prob[y][x] > 0.2;
+                if (bitmap[y][x]) {
+                    on++;
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("MASK_ON ").append(on).append('\n');
+        for (int[] c : DbPostprocess.traceContours(bitmap)) {
+            sb.append("CONTOUR ").append(c.length / 2);
+            for (int v : c) {
+                sb.append(' ').append(v);
+            }
+            sb.append('\n');
+        }
+        List<DbPostprocess.Candidate> trace = new java.util.ArrayList<>();
+        List<DbPostprocess.Quad> pre =
+                DbPostprocess.boxesFromBitmap(prob, w, h, trace, OcrService.SCORE_MODE, false);
+        for (DbPostprocess.Candidate c : trace) {
+            sb.append("CAND ").append(c.index()).append(' ').append(c.status().replace(' ', '_')).append(" side=")
+                    .append(c.miniSide()).append(" score=").append(c.detScore()).append(" slow=")
+                    .append(c.slowScore());
+            if (c.mini() != null) {
+                sb.append(" mini=");
+                for (double[] p : c.mini()) {
+                    sb.append(p[0]).append(',').append(p[1]).append(';');
+                }
+                if (c.quad() != null) {
+                    double[][] e = DbPostprocess.unclip(c.mini(), 1.4);
+                    double[][] m2 = e == null ? null : DbPostprocess.getMiniBoxes(e);
+                    if (m2 != null) {
+                        sb.append(" mini2=");
+                        for (double[] p : m2) {
+                            sb.append(p[0]).append(',').append(p[1]).append(';');
+                        }
+                    }
+                    sb.append(" quad=");
+                    for (double[] p : c.quad()) {
+                        sb.append(p[0]).append(',').append(p[1]).append(';');
+                    }
+                }
+            }
+            sb.append('\n');
+        }
+        for (DbPostprocess.Quad q : DbPostprocess.boxesFromBitmap(prob, w, h, null, OcrService.SCORE_MODE, true)) {
+            sb.append("FINAL_TRIMMED ");
+            for (double[] p : q.points()) {
+                sb.append(p[0]).append(',').append(p[1]).append(';');
+            }
+            sb.append('\n');
+        }
+        Files.writeString(dir.resolve("det_stages.txt"), sb.toString());
     }
 }

@@ -488,3 +488,82 @@ disposable venv on the production detector's line crops of the two existing page
 autoregressive decoder (latency, tokenizer + generation loop would have to be reimplemented in Java), English/IAM domain, and a
 language-model decoder can silently "repair" or invent words, which conflicts with verbatim names. No promise it fixes `debjoy`.
 Cheaper first step if preferred: PP-OCRv5_server_rec_onnx (same code path). Neither has been downloaded.
+
+## Phase 3d: detector post-processing cross-check, padding study, model-trial proposal (2026-11-22)
+Unpushed history verified with git: 7 commits ahead of origin/main = cd780a9, 940bbc3 (Phase 3 harness/docs) + 1c57b7c, a6749ee,
+d2e7c3a, 8654c98, 5fd4bc5 (+ the commits listed at the end of this section). An earlier "five commits" statement was a miscount.
+Env: onnxruntime 1.24.1 (Java 1.22.0), opencv 5.1.0, numpy 2.5.5, pyyaml, pyclipper 1.4.0, shapely 2.2.0 (disposable venv, not in
+repo). Reference = upstream v3.7.0 `db_postprocess.py` (quad path, re-implemented from the source: it imports paddle so it cannot be
+run as-is), `predict_det.py` (order_points_clockwise/clip/filter), `predict_system.py` (sorted_boxes). Params = det.yml (0.2/0.45/1.4,
+min_size 3), score mode SLOW (Java) and FAST both run on the reference. Reproduce: `./gradlew crossCheckDump -PevalManifest=M
+-PoutDir=D` then `python tools/xcheck/xcheck_det.py D/case0 tag` and `python tools/xcheck/xcheck_pad.py D/case0`
+(XC_MODELS=models; dumps contain private pixels: keep outside git, delete after use).
+
+Detector stage results on the IDENTICAL probability map (both pages):
+| Stage | Result |
+|---|---|
+| Threshold mask | exact pixel count (179912 / 213783) |
+| Contours | every Java outer contour matched by bbox (13/13, 30/30). RETR_LIST also returns hole contours (119 / 445) which Java does not trace (they score ~0 and are filtered). Polygon area equal except 3 contours differing by 1-2 px^2 (2 tiny rejected, 1 accepted: 285 vs 286 vertices) |
+| Candidate retention | identical sets (private 6/6, repo 3/3, no mismatches). Reference FAST scoring rejects the long cursive line-3 box on the private page (5 vs 6): the documented SLOW deviation |
+| minAreaRect (accepted) | equal to cv2 within 0.01 px. Pre-set tolerance 0.51 was exceeded only on tiny rejected contours (max 1.0 px) |
+| Box score (SLOW) | Java ~0.006-0.013 higher (fillPoly vs scanline mask rasterization); exceeds the pre-set 0.005 tolerance, retention margins are >=0.11 so no effect |
+| Unclip (min box after offset) | 0.5-1.8 px apart (pre-set 1.0 exceeded): pyclipper works on integer-truncated inputs, Java uses exact offsets (documented deviation #3, magnitude larger than the earlier "<0.008 px" estimate) |
+| Final quads (scaled, clipped) | differ by 0-2 px per corner (exactly equal 1/6 and 0/3); same corner order; clip to W-1/H-1 changed nothing here |
+| order_points_clockwise | does not reorder these boxes (same order as get_mini_boxes) |
+Effect of the ~1 px box difference: crop sizes differ by 1-2 px and low-margin lines change in BOTH directions (private line 2 with
+the upstream box decodes `LIFE ITSELF IS COMPLLOATED` instead of `ITSIELF`; repo line 3 `My Nowve  leiy` vs `Sty Nove o leiy`).
+So recognition of these lines is sensitive to +-1 px crop geometry. Not a defect: no change made (documented deviation; replicating
+pyclipper quantization was NOT done and is not justified by this evidence).
+Reading order: upstream `sorted_boxes` would emit `y Name is dehjay` BEFORE `My` on the private page; our tilt-aware ReadingOrder
+keeps `My Name is ...` together. Evidence supports the documented deviation. (The upstream-box crop also leaks the `y` of `My`, which
+our neighbor-padding trim removes.)
+New general fix: coordinate scaling now uses half-to-even (`Math.rint`, like `np.round`) instead of `Math.round`
+(`DbPostprocess.scaleCoord`, tested). No effect on the two pages.
+
+Confirmed defects fixed (earlier, retained): bicubic kernel weights (Phase 3c) and detector size half-to-even rounding. Regression
+tests now: weights sum to 1; uniform image preserved through a tilted warp, resize and straighten rotation; textured tilted crop mean
+within 1.5% (the old kernel fails 4 of 6 parity tests when restored); half-to-even size and coordinate cases. These fixes did NOT
+reduce edit counts on the two photos (12/67 and 5/91 before and after).
+
+Padding study (deterministic, same crop bytes; widths = own / upstream-batched / 320,480,640,960; no expected text or confidence
+used). The model input width is dynamic ([-1,3,48,-1]); the pad is exactly 0.0 after normalization (source gray 127.5, not white).
+Changing only the pad width changes valid-frame logits (max |d| up to ~1.0, i.e. probabilities) and sometimes the text, e.g. private
+line 2: own `LIFE ITSIELF IS COMPLLOATED`, pad 480 `ITSELF ... COMPLLOATED`, 640 `COMpLLOATED`; repo line 3: own `Sty Nove o leiy`,
+batched(420) `Sy Nove leiy`, 960 ` N y`; short crops usually unchanged. Rows with width < resized width are NOT padding (the crop is
+squeezed) and are excluded from this conclusion. Interpretation: this attention-based recognizer is not invariant to pad width;
+upstream's default `rec_batch_num=6` pads each crop to its batch's widest crop so upstream results depend on batch composition,
+while upstream also supports `--rec_batch_num 1`, which is what the app does (verified numerically equal: same tensors, same text).
+So one-crop inference is a supported path and this is a compatibility/sensitivity finding, NOT a proven implementation defect.
+No production batching/padding change was made.
+
+Final transcripts/metrics (unchanged by this phase's code): private photo `This is how it's done / LIFE ITSIELF IS COMPLLOATED /
+My Name is dedjay / The work is on progress.` CER 5/91 (0.055) WER 3/18 (0.167); repo photo `This is how it's done / LIFE ITSELF IS
+COMPLLCATED / Sty Nove to leiy` CER 12/67 (0.179) WER 5/13 (0.385); print CER 0. Build: clean build 71 tests green, verifyOcrSetup ok.
+
+Cross-check completeness: DONE on identical data: decode, rotation, detector input, detector inference, mask, contours, candidates,
+minAreaRect, score, unclip, final quads, ordering, warp, recognizer input, recognizer inference, padding. NOT done: numerical
+comparison with the real PaddleOCR Python package end-to-end (paddle not installed; sources were re-implemented), other ORT
+providers, other images. The remaining wrong characters reproduce in the reference stack, which makes a pipeline cause less likely but
+does not exclude a model-only or an input-sensitivity cause.
+
+### Model-trial proposal (facts read directly from the official pages by two page readers; nothing downloaded)
+Corrections to earlier search snippets: the Microsoft TrOCR small card says DeiT encoder / UniLM decoder (not BEiT/RoBERTa) and shows
+NO license field; the Xenova ONNX repo shows "License: mit" (that is Xenova's tag, not Microsoft's).
+1. `microsoft/trocr-small-handwritten` + ONNX `Xenova/trocr-small-handwritten`. Verified: single-text-line OCR fine-tuned on IAM,
+   image-Transformer encoder + text-Transformer decoder, TrOCRProcessor, sentencepiece tokenizer file present; PyTorch weights
+   246 MB (pickle .bin). ONNX folder (Xenova) totals 826 MB listing fp32/fp16/quantized variants (e.g. encoder 87.5 MB,
+   decoder_model_merged 159 MB, fp16 79.9 MB, quantized 40.5 MB; encoder_model_quantized 23.1 MB). Converter tool/quantization method
+   NOT STATED; "temporary" separate ONNX repo per its card. UNKNOWN: Microsoft licence text/redistribution terms, language scope,
+   input size/normalization, generation settings, parameter count, any CER, CPU latency. Integration work (estimate, not measured):
+   ViT-style preprocessing, sentencepiece tokenizer + autoregressive generation loop (merged decoder with KV cache) in Java, line
+   crops from our detector; decoder is a language model and may substitute words.
+2. `PaddlePaddle/PP-OCRv5_server_rec_onnx` (official org repo). Verified: license tag apache-2.0 (no license text on page), task
+   text-line recognition, English/Chinese/Japanese, card claims handwriting support with a table showing "Handwritten English"
+   0.5806 (metric and dataset NOT named; whole-line exact match noted), files: inference.onnx 84.5 MB, inference.yml 148 kB (no
+   separate dictionary file listed), converter NOT STATED (uploaded by an individual account). UNKNOWN: input shape/normalization,
+   dictionary location, decoding, parameter count, latency, whether it is a drop-in for our preprocessing (same family suggests CTC
+   but that is NOT stated). Integration: likely small (same pipeline) if CTC + similar preprocessing; measured unknown.
+Recommendation (needs your approval before any download or runtime dependency): evaluate #2 first as a cheap same-pipeline check
+(one 84.5 MB file, run in the disposable venv on the production detector's crops of the two existing pages, per-case CER/WER), and
+only if it shows promise consider #1 (large, new generation stack). Neither is promised to fix `debjoy`; the PP-OCRv5 handwriting
+figure above is a vendor table with an unnamed metric.
