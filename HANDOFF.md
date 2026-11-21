@@ -567,3 +567,45 @@ Recommendation (needs your approval before any download or runtime dependency): 
 (one 84.5 MB file, run in the disposable venv on the production detector's crops of the two existing pages, per-case CER/WER), and
 only if it shows promise consider #1 (large, new generation stack). Neither is promised to fix `debjoy`; the PP-OCRv5 handwriting
 figure above is a vendor table with an unnamed metric.
+
+## Phase 3e: isolated PP-OCRv5 server recognizer trial (2026-11-22) — evaluation only, nothing integrated
+Candidate identity (verified from the HF API/files before download): `PaddlePaddle/PP-OCRv5_server_rec_onnx`, revision
+`b70df217f4fd99d14f970bad092cebe7d74cc4d1`, license tag apache-2.0 (no license text on the page). It IS a different recognizer
+from the bundled `PP-OCRv6_small_rec` (bundled rec.onnx 21,159,378 B sha256 `5435fd74…`; candidate 84,503,027 B).
+Downloaded to `~/.cache/ppocrv5-eval/` (outside the repo, untracked): inference.onnx sha256
+`d9dc333c9c7b042c6dffb8e33d72b6f65c9c1d463d0a3c2f78174fea55e94752`, inference.yml `2c719dba044c4e2228aef8ff92f5f575394d75d24c16de096a33b7cfd902f66d`
+(148,345 B, contains the character dictionary), README.md `806a481f…`. No other downloads.
+Contract (from the artifact + its yml, nothing assumed from v6): input `x[N,3,48,W]` float, N and W dynamic; BGR; `RecResizeImg
+image_shape [3,48,320]` (same rule as the bundled model, so our preprocessing applies); `CTCLabelDecode`; dictionary 18,383 entries
+(no space entry) and 18,385 output classes = blank@0 + dictionary + trailing space (same convention as the bundled model). The
+Java-parsed decode table equals PyYAML's (18,385 entries, identical SHA-256 of the code-point listing).
+Method: the unchanged Java pipeline was run with `NOTEBOOK_AI_MODELS=~/.cache/ppocrv5-eval/models_v5` (a scratch dir with the
+bundled detector + the candidate rec.onnx/rec.yml + generated checksums), so detector, crops (byte-identical: same sizes at every
+region), drop_score 0.5 (applied to each model's own scores), reading order and grouping were identical; only recognition differed.
+Timing protocol (both models, one JVM per case, `-Xmx1g`, `evaluate --warmup 1 --repeat 5`): init timed separately, first page run
+cold and reported separately, then 1 warm-up and 5 timed runs; peak RSS = getrusage of the child JVM (includes ORT native memory;
+dominated by the 4000x1792 detector pass; the machine was shared so treat as +-10%). Reproduce:
+`NOTEBOOK_AI_MODELS=$HOME/.cache/ppocrv5-eval/models_v5 ./gradlew evaluate -PevalManifest=M -Pwarmup=1 -Prepeat=5 -PexpJvm=-Xmx1g`
+(a 3-case JVM was OOM-killed on this machine; run one case per JVM) and `ctcProbe` for per-region output.
+
+Results (raw, per case; edits = char edits):
+| Case | Baseline PP-OCRv6_small | Candidate PP-OCRv5 server |
+|---|---|---|
+| Repo photo (3 lines) | CER 12/67 (0.179), WER 5/13: `This is how it's done` / `LIFE ITSELF IS COMPLLCATED` / `Sty Nove to leiy` | CER 17/67 (0.254), WER 7/13: `Tis is how it's done` / `LIFE ITSELF SS COMEATED` / `y- Nowe siy.` |
+| Private photo (4 lines) | CER 5/91 (0.055), WER 3/18: `…` / `LIFE ITSIELF IS COMPLLOATED` / `My Name is dedjay` / `The work is on progress.` | CER 6/91 (0.066), WER 4/18: `…` / `LIFE ITSELF SS COMPLIATED` / `My Name is dekiay` / `The work is on progrcss.` |
+| Rendered print (4 lines) | CER 0 | CER 0 (identical text) |
+| Synthetic smoke (numericals / equation / prose; no ground truth) | `1` / `—` / `w` | `~~` / no text / no text (not evidence) |
+Per-line changes: private line 2 `ITSIELF`->`ITSELF` (fixed) and `COMPLLOATED`->`COMPLIATED` (3 edits -> 2 on that line) but `IS`->`SS` (new);
+line 3 `dedjay`->`dekiay` (2 -> 3 edits: b->k, j->i, o->a); line 4 `progress.`->`progrcss.` (new error). Repo photo: line 1 regresses
+(`This`->`Tis`, a line the baseline had exact), line 2 regresses (1 -> 5 edits), line 3 equally unreadable. Candidate per-region
+recognition scores are lower on correct lines (e.g. 0.92 vs 0.98 on line 1). Insertions/deletions/substitutions per region are in
+`ctcProbe` output (candidate adds more deletions on the repo photo's line 3).
+Timing (warm, rec only, mean of 5): repo photo 77 ms -> 281 ms; private 133 -> 548 ms; print 139 -> 510 ms (about 3.6-4x slower);
+init 0.42-0.64 s -> 0.71-0.91 s; peak RSS 2.86/2.71/0.63 GB -> 3.10/3.09/0.86 GB (baseline vs candidate; page and print cases).
+Model-card figure (0.5806 "Handwritten English") is a vendor table with no named metric/dataset; not interpreted as an error rate.
+Verdict: REJECT for integration on this evidence: no net gain on two same-notebook photos (one improved word-level fix is offset by new
+errors; the older photo and a previously exact line regress), ~4x slower recognition, larger model, same print result. Broader
+evaluation of THIS candidate is not justified by these results; gather more pages first (see dataset request) before testing any
+further recognizer. Limitations: 2 photos, 1 writer/notebook, no digits/equation ground truth, single run settings, other models
+(e.g. TrOCR) not tried. Production, default decoder/padding/preprocessing and UI routing were not touched (default eval and 71 tests
+re-run unchanged).
