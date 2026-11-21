@@ -294,3 +294,54 @@ A tighter crop of the same page (GUI) read different text (e.g. `Debjay.`), i.e.
 - System-wide `/usr/local` install not refreshed (run `sudo make install`).
 - Recognize Selection/Line failure path and the JavaFX job-thread stale-result path were not driven in the GUI.
 - Single real handwriting page for accuracy; no accuracy benchmark exists.
+
+## Phase 3: accuracy + evaluation (2026-11-22, this commit)
+- Starting state verified: main at 9d8637b (= origin/main), tree clean. No
+  roadmap doc defines Phase 3 differently; scope recorded here.
+- Baseline preserved: `~/Desktop/test.jpg` present, SHA-256
+  `acc880a8b518c3162dadbd05c0bfa6954f38f4fc7ecf21a27a6974dabee491d8`,
+  4000x1800, reproduced via `./gradlew recognizeImage
+  -Pimage=$HOME/Desktop/test.jpg -Protate=3` (exit 0). The repo 3-line
+  sample (`a52576ac…`) is a different, older photo — kept as a separate
+  regression case with its own ground truth (Debjoy vs debjoy kept as-is).
+- Harness: `notebookai.eval` (EditDistance CER/WER on code points, whitespace
+  tokenization, positional line reporting, no normalization), `Evaluate`
+  runner (manifest TSV: image/rotate/straighten/expected, one shared session,
+  init timed separately, optional per-case debug dirs), `./gradlew evaluate
+  -PevalManifest=...`. Committed `eval/cases.tsv` (repo 3-line sample);
+  private `eval-local/cases.tsv` (git-ignored, 4-line sample). 7 new metric
+  tests (empty/insert/delete/substitute, kitten/sitting, manifest parsing).
+- Dataset: 1 real page per case (2 photos total, same notebook). Labeled
+  limited. Synthetic scribbles excluded from accuracy (no ground truth).
+  No numerical/equation ground truth exists. Private image + transcription
+  NOT committed. Request: more user pages with exact transcriptions —
+  cursive + print, mixed case, names, numbers/units/equations, varied
+  angles — via `eval-local/cases.tsv`.
+- Results (verbatim primary): 3-line sample CER 0.179 (12/67), WER 0.308
+  (4/13), lines 3->3; 4-line sample CER 0.055 (5/91), WER 0.167 (3/18),
+  lines 4->4. Init ~370ms; page totals 2.6-4.3s.
+- Experiments (all reported): tight line-3 crop [220,1470]+1500x385 →
+  "My Name is Debjay/work e" (D error persists without neighbors);
+  ±3° straightened rec-only → "" (0.000) and "y   Bay" (0.323) — worse,
+  crop already level; multi-line rec-only → "hi"/"福" (correctly
+  meaningless); auto-crop rec-only → "y Noaw Bedy" (0.545), identical to
+  page run. Surrounding line fragments noted where present.
+- Audit: full boundary check vs v3.7.0 sources (see MODEL_MANIFEST); no
+  defect found. Rejected: BGR revert (fix verified correct), width caps,
+  straightening as a fix, model replacement (needs approval + evidence).
+- Fixes: NONE to production recognition — no change beat the baseline
+  without inventing mappings. Kept the correct baseline + tooling.
+- Verification: `clean build` green (60 tests), `verifyOcrSetup` exit 0,
+  both eval manifests exit 0, CLI regressions (numericals/equation still
+  return regions; RealSampleRegressionTest + DetectionRegressionTest pass).
+  No production recognition change → no reinstall (installed GUI predates
+  Phase 3 but is behavior-identical; user-local prefix untouched;
+  /usr/local untouched — system update command: `sudo make install`).
+  GUI not re-driven (unchanged since Phase 2 verification).
+- Remaining: broader handwriting coverage; the 5 known glyph confusions
+  (b/h, o/a, I/L, C/O + 1 insertion) are model-level at high confidence —
+  confidence must not be read as correctness.
+
+## Commit
+Phase 3 commit on `main` (see `git log`). Models stay git-ignored;
+private eval cases stay out of git; no push.

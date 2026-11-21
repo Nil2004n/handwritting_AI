@@ -14,6 +14,9 @@ no network at runtime.
   editing, copy, raw restore. JavaFX loads as named modules (no startup
   warning on the pinned JDK 21 runtime).
 - `./gradlew verifyOcrSetup` — Phase 0 gate: sessions load, I/O printed.
+- `./gradlew evaluate -PevalManifest=eval/cases.tsv` — accuracy harness:
+  verbatim CER/WER + line structure + timings per case. Private cases go
+  in `eval-local/cases.tsv` (same format, git-ignored, never committed).
 - `./gradlew clean build` — compiles + runs the JUnit suite.
 
 ## Image preparation and coordinates
@@ -45,8 +48,7 @@ sh tools/download-models.sh   # models + sha256sum verification
 ./gradlew clean build
 ```
 
-## Install globally (Makefile)
-```sh
+## Install globally (Makefile)```sh
 make build models             # as your normal user (compiles, fetches models)
 make install                  # user-local if PREFIX is writable, else rerun:
 sudo make install             # system-wide to /usr/local (copies files only;
@@ -72,11 +74,11 @@ order. No table/formula/numericals handling.
 ## Current limitations
 - Rendered print English transcribes near-perfectly; the bundled synthetic
   scribbles are not real text (regions found, text meaningless by design).
-- First real-handwriting measurement (2026-11-21, `samples/handwriting-test.jpg`,
-  phone photo of notebook page): 2 of 3 lines recovered, line 1
-  character-perfect; large cursive missed, one line split. See
-  `samples/transcriptions/handwriting-test.txt`. This file is now the
-  standard real-handwriting test sample — use it for future verification.
+- Real handwriting (2026-11-21): 3-line repo sample CER 0.179 / WER 0.308;
+  4-line private sample (`~/Desktop/test.jpg`, not committed) CER 0.055 /
+  WER 0.167. Single-page evidence only — broader coverage needs more pages
+  with exact transcriptions (contributions welcome: drop them in
+  `eval-local/` with a `cases.tsv` entry).
 - CPU only, sequential single-image inference, no batching optimization.
 - Debug overlays/crops are opt-in and never written into the source tree.
 

@@ -70,3 +70,28 @@ the model repos.
 - No OpenCV: geometry (contour tracing, minAreaRect, warp, unclip) is
   hand-ported pure Java; no OpenCV or polygon-offset dependency added.
 - No PaddlePaddle Java SDK methods are used; only ORT Java session APIs.
+
+## Phase 3 pipeline audit (2026-11-22, upstream v3.7.0 tag `b03f4642`)
+Checked boundary by boundary against `operators.py`, `rec_img_aug.py`,
+`label_ops.py`, `db/rec_postprocess.py`, `predict_{det,rec,system}.py`:
+- Decode: `TYPE_3BYTE_BGR` raster is R,G,B band order; the code swaps to true
+  BGR like `cv2.imread` (the earlier true-BGR fix stands — verified correct,
+  not reverted). EXIF applied deliberately (upstream ignores it).
+- Detector input: BGR bytes × 1/255, ImageNet mean/std applied per stored
+  channel, CHW layout — matches `NormalizeImage`+`ToCHWImage` (order hwc).
+  Resize 736/min + 32-multiple + bilinear matches `DetResizeForTest` type 0.
+- Recognition input: BGR kept, bilinear to height 48, `(v/255-0.5)/0.5`,
+  right zero-pad to `int(48*max(320/48, ratio))` — matches `resize_norm_img`
+  standard path. No width cap (same as upstream ONNX dynamic shapes; the 3200
+  cap lives only in TensorRT configs, not the ONNX graph).
+- Geometry: baseline image carries an EXIF block but no orientation tag
+  (orientation-1 path); `-Protate=3` mapping verified by readable output;
+  `-Protate=3` mapping verified by readable output; warp/perspective covered
+  by unit tests; quad handling + minAreaRect validated in Phases 1–2.
+- Dictionary: 18,708 entries + blank@0 + space@18709 (`use_space_char=True`
+  default, verified in code and by space firing at word gaps). CTC decode
+  drops class 0 and collapses repeats, matching `CTCLabelDecode.decode`.
+- No truncation: full logit sequences decoded; no length caps anywhere.
+- Conclusion: no pipeline defect found; remaining errors are single-glyph
+  confusions (b/h, o/a, I/L, C/O) plus one insertion, all at high model
+  confidence. No production change made (see HANDOFF Phase 3).
