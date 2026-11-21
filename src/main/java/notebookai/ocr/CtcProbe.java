@@ -106,6 +106,7 @@ public final class CtcProbe {
                 }
             }
             int resizedW = (int) Math.min(in.width(), Math.ceil(48.0 * crop.width() / crop.height()));
+            System.out.printf(Locale.ROOT, "R%d crop-sha256=%s%n", i, sha256(crop.bgr(), crop.width(), crop.height()));
             System.out.printf(Locale.ROOT,
                     "R%d \"%s\" det=%.3f rec=%.3f | crop %dx%d%s -> rec input 3x48x%d (resized width %d, zero-pad %d) | "
                             + "output [%d steps x %d classes] (width/steps=%.1f) valid steps~%d, blank-argmax frames %d, "
@@ -203,6 +204,18 @@ public final class CtcProbe {
             sb.append(" | (no emitted token; see neighbouring frames of the aligned region)");
         }
         System.out.println(sb);
+    }
+
+    /** Content hash of the exact crop pixels (BGR bytes + dimensions) handed to the recognizer. */
+    private static String sha256(byte[] bgr, int w, int h) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        md.update((w + "x" + h + ":").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        md.update(bgr);
+        StringBuilder sb = new StringBuilder();
+        for (byte b : md.digest()) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     private static String expectation(float[][] lg, int expCls, int t0, int t1, String ref) {
