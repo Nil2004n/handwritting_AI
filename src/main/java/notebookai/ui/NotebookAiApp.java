@@ -52,7 +52,11 @@ import notebookai.model.ModelConfig;
 import notebookai.model.OcrResult;
 import notebookai.model.WorkingImage;
 import notebookai.ocr.ImageOps;
+import notebookai.project.BackgroundTasks;
 import notebookai.project.JobTicket;
+import notebookai.project.MemoryGuard;
+import notebookai.project.PageRestore;
+import notebookai.project.ShutdownPolicy;
 import notebookai.project.PageData;
 import notebookai.project.ProjectActions;
 import notebookai.project.ProjectData;
@@ -152,6 +156,14 @@ public class NotebookAiApp extends Application {
     private boolean jobRunning; // OCR job, import or project open in flight (locks page/project actions)
     private boolean saving;
     private boolean closing;
+    private boolean closeRequested; // user asked to close while background work runs: close when it finishes
+    private final BackgroundTasks tasks = new BackgroundTasks(
+            r -> {
+                Thread t = new Thread(r, "notebook-ai-worker");
+                t.setDaemon(true);
+                t.start();
+            },
+            Platform::runLater);
 
     @Override
     public void start(Stage stage) {
@@ -334,18 +346,64 @@ public class NotebookAiApp extends Application {
                 return;
             }
             ev.consume();
-            if (saving) {
-                statusLabel.setText("A save is in progress; wait for it to finish, then close.");
-                return;
-            }
-            confirmUnsavedThen(() -> {
-                closing = true;
-                stage.close();
-            });
+            requestClose();
         });
         stage.show();
         refreshPageList();
         updateControls();
+    }
+
+    /**
+     * Close policy. Background work (OCR inference, import, project open, save) cannot be cancelled
+     * safely, so closing while it runs WAITS: the window closes automatically once it has finished
+     * and the unsaved-changes prompt still applies afterwards. Nothing is cancelled.
+     */
+    private void requestClose() {
+        switch (ShutdownPolicy.onCloseRequest(jobRunning, saving, session.isDirty())) {
+            case CLOSE_NOW -> {
+                closing = true;
+                stage.close();
+            }
+            case PROMPT_UNSAVED -> confirmUnsavedThen(() -> {
+                closing = true;
+                stage.close();
+            });
+            case WAIT_FOR_BACKGROUND -> {
+                if (closeRequested) {
+                    statusLabel.setText("Waiting for the running operation to finish, then the window will close.");
+                    return;
+                }
+                ButtonType wait = new ButtonType("Close when finished", ButtonBar.ButtonData.YES);
+                ButtonType keep = new ButtonType("Keep working", ButtonBar.ButtonData.CANCEL_CLOSE);
+                Alert a = new Alert(Alert.AlertType.CONFIRMATION, "", wait, keep);
+                a.setTitle("Operation in progress");
+                a.setHeaderText("An operation is still running.");
+                a.setContentText("It cannot be cancelled safely, so it will be allowed to finish. The window will "
+                        + "then close (you will still be asked about unsaved changes).");
+                Optional<ButtonType> r = a.showAndWait();
+                if (r.isPresent() && r.get() == wait) {
+                    closeRequested = true;
+                    statusLabel.setText("Waiting for the running operation to finish, then the window will close.");
+                    closeIfRequested(); // it may already have finished while the dialog was open
+                }
+            }
+        }
+    }
+
+    private void closeIfRequested() {
+        if (closeRequested && !jobRunning && !saving) {
+            closeRequested = false;
+            requestClose();
+        }
+    }
+
+    @Override
+    public void stop() {
+        // Reached only when idle (see requestClose): release the OCR sessions.
+        if (sharedService != null) {
+            sharedService.close();
+            sharedService = null;
+        }
     }
 
     private MenuBar buildMenuBar() {
@@ -450,19 +508,38 @@ public class NotebookAiApp extends Application {
         return toFxImage(ImageOps.resizeBilinear(bgr, w, h, tw, th), tw, th);
     }
 
-    /** Builds the working image for a page: original bytes + saved prep, in the exact order the UI applies it. */
-    private static WorkingImage buildWorking(PageData page) throws Exception {
+    /**
+     * Rebuilds the working image for a page (original bytes + saved prep) after checking that the
+     * decode fits in memory BEFORE allocating. May discard saved geometry that does not fit.
+     */
+    private static PageRestore.Restored buildWorking(PageData page) throws Exception {
+        int[] dim = ImageOps.peekDimensions(page.original());
+        if (dim == null) {
+            throw new IllegalStateException("the image data is unreadable");
+        }
+        String refuse = MemoryGuard.checkAgainstRuntime(dim[0], dim[1]);
+        if (refuse != null) {
+            throw new IllegalStateException(refuse);
+        }
         ImageOps.DecodedImage d = ImageOps.decode(page.original());
-        WorkingImage w = new WorkingImage(d.bgr(), d.width(), d.height());
-        w.rotateSteps(page.quarterTurnsCw());
-        if (page.fineDegrees() != 0) {
-            w.setStraighten(page.fineDegrees());
+        return PageRestore.restore(page, d.bgr(), d.width(), d.height());
+    }
+
+    /** Rendered view for a thumbnail; never mutates the page (runs off the UI thread). */
+    private static WorkingImage.Rendered thumbnailSource(PageData page) throws Exception {
+        int[] dim = ImageOps.peekDimensions(page.original());
+        if (dim == null || MemoryGuard.checkAgainstRuntime(dim[0], dim[1]) != null) {
+            throw new IllegalStateException("cannot render a thumbnail");
         }
+        ImageOps.DecodedImage d = ImageOps.decode(page.original());
+        int[] frame = WorkingImage.frameSize(d.width(), d.height(), page.quarterTurnsCw(), page.fineDegrees());
         int[] crop = page.crop();
-        if (crop != null) {
-            w.setCrop(crop);
+        if (crop != null && !(crop[0] >= 0 && crop[1] >= 0 && crop[2] <= frame[0] && crop[3] <= frame[1]
+                && crop[2] > crop[0] && crop[3] > crop[1])) {
+            crop = null;
         }
-        return w;
+        return WorkingImage.restore(d.bgr(), d.width(), d.height(), page.quarterTurnsCw(), page.fineDegrees(),
+                crop).render();
     }
 
     private void refreshPageList() {
@@ -520,13 +597,19 @@ public class NotebookAiApp extends Application {
             deactivatePage();
             return;
         }
-        WorkingImage w;
+        PageRestore.Restored restored;
         try {
-            w = buildWorking(page);
-        } catch (Exception e) {
-            statusLabel.setText("Could not load page \"" + page.name() + "\": " + e.getMessage());
+            restored = buildWorking(page);
+        } catch (Throwable e) { // includes OutOfMemoryError: report instead of leaving a half-loaded page
+            statusLabel.setText("Could not load page \"" + page.name() + "\": "
+                    + BackgroundTasks.describe(e instanceof IllegalStateException ? new notebookai.ocr.OcrException(e.getMessage()) : e));
             refreshPageList();
             return;
+        }
+        WorkingImage w = restored.working();
+        if (!restored.notices().isEmpty()) {
+            page.setLoadNotice(String.join(" ", restored.notices()));
+            modified(); // discarding unusable saved geometry changes the project content
         }
         activePageId = id;
         working = w;
@@ -653,6 +736,11 @@ public class NotebookAiApp extends Application {
                 int[] dim = ImageOps.peekDimensions(data);
                 if (dim == null || (long) dim[0] * dim[1] > ProjectStore.MAX_PIXELS) {
                     errs.add(name + ": unreadable or larger than " + (ProjectStore.MAX_PIXELS / 1_000_000) + " megapixels");
+                    continue;
+                }
+                String tooBig = MemoryGuard.checkAgainstRuntime(dim[0], dim[1]);
+                if (tooBig != null) {
+                    errs.add(name + ": " + tooBig);
                     continue;
                 }
                 ImageOps.DecodedImage d = ImageOps.decode(data);
@@ -872,8 +960,7 @@ public class NotebookAiApp extends Application {
         Thread t = new Thread(() -> {
             for (PageData p : snapshot) {
                 try {
-                    WorkingImage w = buildWorking(p);
-                    WorkingImage.Rendered r = w.render();
+                    WorkingImage.Rendered r = thumbnailSource(p);
                     Image img = thumbnail(r.bgr(), r.width(), r.height());
                     Platform.runLater(() -> {
                         if (session.epoch() == epoch) {
@@ -925,39 +1012,36 @@ public class NotebookAiApp extends Application {
         saving = true;
         updateControls();
         statusLabel.setText("Saving " + target.getFileName() + "…");
-        Thread t = new Thread(() -> {
-            String error = null;
-            try {
-                ProjectStore.save(job.snapshot(), job.target());
-            } catch (ProjectException e) {
-                error = e.getMessage();
-            } catch (RuntimeException e) {
-                error = "Unexpected failure: " + e.getMessage();
+        tasks.run(() -> {
+            ProjectStore.save(job.snapshot(), job.target());
+            return Boolean.TRUE;
+        }, outcome -> {
+            saving = false;
+            updateControls(); // refresh BEFORE any modal dialog so the window is not left greyed/"saving…"
+            boolean ok = false;
+            if (outcome.ok()) {
+                ok = session.saveSucceeded(job);
+                statusLabel.setText("Saved " + target.getFileName() + ".");
+            } else {
+                statusLabel.setText("Save failed: " + outcome.error());
+                Alert a = new Alert(Alert.AlertType.ERROR);
+                a.setTitle("Save failed");
+                a.setHeaderText("The project was not saved.");
+                a.setContentText(outcome.error());
+                a.showAndWait();
             }
-            String err = error;
-            Platform.runLater(() -> {
-                saving = false;
-                updateControls(); // refresh BEFORE any modal dialog so the window is not left greyed/"saving…"
-                boolean ok = false;
-                if (err == null) {
-                    ok = session.saveSucceeded(job);
-                    statusLabel.setText("Saved " + target.getFileName() + ".");
-                } else {
-                    statusLabel.setText("Save failed: " + err);
-                    Alert a = new Alert(Alert.AlertType.ERROR);
-                    a.setTitle("Save failed");
-                    a.setHeaderText("The project was not saved.");
-                    a.setContentText(err);
-                    a.showAndWait();
-                }
-                updateControls();
-                if (ok && afterSuccess != null) {
+            updateControls();
+            if (afterSuccess != null) {
+                if (ShutdownPolicy.mayProceedAfterSave(ok, session.isDirty())) {
                     afterSuccess.run();
+                } else if (ok) {
+                    // The user kept editing while the save ran: those edits are NOT in the file.
+                    statusLabel.setText("Saved, but the project changed during the save; changes made meanwhile are still unsaved.");
+                    confirmUnsavedThen(afterSuccess);
                 }
-            });
+            }
+            closeIfRequested();
         });
-        t.setDaemon(true);
-        t.start();
     }
 
     // ---- export ----
@@ -1385,41 +1469,29 @@ public class NotebookAiApp extends Application {
         jobRunning = true;
         updateControls();
         statusLabel.setText(busyText);
-        Thread worker = new Thread(() -> {
-            T result;
-            String error = null;
+        tasks.run(work::run, outcome -> {
+            jobRunning = false; // always restored: the runner delivers exactly one completion, even after an Error
             try {
-                result = work.run();
-            } catch (OcrException e) {
-                result = null;
-                error = e.getMessage();
-            } catch (RuntimeException e) {
-                result = null;
-                error = "Unexpected failure: " + e.getMessage();
-            }
-            T done = result;
-            String err = error;
-            Platform.runLater(() -> {
-                jobRunning = false;
-                try {
-                    boolean pageActive = ticket.pageId() != null && ticket.pageId().equals(activePageId)
-                            && working != null && session.project().find(ticket.pageId()) != null;
-                    boolean accepted = ticket.acceptedBy(session.epoch(), pageActive,
-                            pageActive ? working.revision() : -1, jobGen);
-                    if (!accepted) {
-                        statusLabel.setText("Ignored stale result (page, project or image changed mid-job).");
-                    } else if (err != null) {
-                        statusLabel.setText("Failed: " + err);
-                    } else {
-                        onDone.accept(done);
+                boolean pageActive = ticket.pageId() != null && ticket.pageId().equals(activePageId)
+                        && working != null && session.project().find(ticket.pageId()) != null;
+                boolean accepted = ticket.acceptedBy(session.epoch(), pageActive,
+                        pageActive ? working.revision() : -1, jobGen);
+                if (!accepted) {
+                    statusLabel.setText("Ignored stale result (page, project or image changed mid-job).");
+                } else if (!outcome.ok()) {
+                    statusLabel.setText("Failed: " + outcome.error());
+                } else {
+                    try {
+                        onDone.accept(outcome.value());
+                    } catch (RuntimeException e) {
+                        statusLabel.setText("Could not apply the result: " + BackgroundTasks.describe(e));
                     }
-                } finally {
-                    updateControls(); // After onDone so it sees the new results.
                 }
-            });
+            } finally {
+                updateControls(); // After onDone so it sees the new results.
+                closeIfRequested();
+            }
         });
-        worker.setDaemon(true);
-        worker.start();
     }
 
     /** Runs a non-OCR background task (import, project open) under the same UI lock. */
@@ -1427,39 +1499,29 @@ public class NotebookAiApp extends Application {
         jobRunning = true;
         updateControls();
         statusLabel.setText(busyText);
-        Thread worker = new Thread(() -> {
-            T result = null;
-            String error = null;
+        tasks.run(work::run, outcome -> {
+            jobRunning = false;
             try {
-                result = work.run();
-            } catch (ProjectException e) {
-                error = e.getMessage();
-            } catch (Exception e) {
-                error = "Unexpected failure: " + e.getMessage();
-            }
-            T done = result;
-            String err = error;
-            Platform.runLater(() -> {
-                jobRunning = false;
-                try {
-                    if (err != null) {
-                        updateControls();
-                        statusLabel.setText("Failed: " + err);
-                        Alert a = new Alert(Alert.AlertType.ERROR);
-                        a.setTitle("Operation failed");
-                        a.setHeaderText("The current project was not changed.");
-                        a.setContentText(err);
-                        a.showAndWait();
-                    } else {
-                        onDone.accept(done);
+                if (!outcome.ok()) {
+                    updateControls(); // refresh BEFORE the modal dialog
+                    statusLabel.setText("Failed: " + outcome.error());
+                    Alert a = new Alert(Alert.AlertType.ERROR);
+                    a.setTitle("Operation failed");
+                    a.setHeaderText("The current project was not changed.");
+                    a.setContentText(outcome.error());
+                    a.showAndWait();
+                } else {
+                    try {
+                        onDone.accept(outcome.value());
+                    } catch (RuntimeException e) {
+                        statusLabel.setText("Could not apply the result: " + BackgroundTasks.describe(e));
                     }
-                } finally {
-                    updateControls();
                 }
-            });
+            } finally {
+                updateControls();
+                closeIfRequested();
+            }
         });
-        worker.setDaemon(true);
-        worker.start();
     }
 
     private interface JobWork<T> {
