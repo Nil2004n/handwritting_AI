@@ -48,7 +48,55 @@ public final class ImageOps {
         if (img == null) {
             throw new OcrException("Unreadable or corrupt image: " + path);
         }
-        int orientation = readExifOrientation(path);
+        return finishDecode(img, readExifOrientation(path));
+    }
+
+    /**
+     * Loads JPEG/PNG from in-memory bytes (project-owned image content), same pipeline as
+     * {@link #decode(Path)}: EXIF orientation applied, true BGR bytes returned.
+     */
+    public static DecodedImage decode(byte[] data) throws OcrException, IOException {
+        BufferedImage img;
+        try (InputStream in = new java.io.ByteArrayInputStream(data)) {
+            img = ImageIO.read(in);
+        }
+        if (img == null) {
+            throw new OcrException("Unreadable or corrupt image data.");
+        }
+        int orientation = 1;
+        try (InputStream in = new java.io.ByteArrayInputStream(data)) {
+            Metadata metadata = ImageMetadataReader.readMetadata(in);
+            ExifIFD0Directory dir = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
+            if (dir != null && dir.containsTag(ExifIFD0Directory.TAG_ORIENTATION)) {
+                orientation = dir.getInt(ExifIFD0Directory.TAG_ORIENTATION);
+            }
+        } catch (Exception ignored) {
+            // Fall through to "normal".
+        }
+        return finishDecode(img, orientation);
+    }
+
+    /** Image dimensions from the header only (no pixel decode), or null if unreadable. */
+    public static int[] peekDimensions(byte[] data) {
+        try (javax.imageio.stream.ImageInputStream in =
+                ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(data))) {
+            java.util.Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(in);
+            if (!readers.hasNext()) {
+                return null;
+            }
+            javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(in, true, true);
+                return new int[] {reader.getWidth(0), reader.getHeight(0)};
+            } finally {
+                reader.dispose();
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static DecodedImage finishDecode(BufferedImage img, int orientation) {
         img = toBgr(img);
         img = applyOrientation(img, orientation);
         int w = img.getWidth();
