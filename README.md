@@ -20,6 +20,24 @@ sh tools/download-models.sh   # models + sha256sum verification
 ./gradlew clean build
 ```
 
+## Install globally (Makefile)
+```sh
+make build                    # compile + stage installDist
+make test                     # clean build + unit tests
+make verify                   # load ONNX sessions, print I/O metadata
+make recognize IMAGE=img.jpg  # OCR one image via the CLI
+make install                  # install to /usr/local (rerun with sudo if needed)
+make install PREFIX=$HOME/.local   # user-local install, no root ($HOME/.local/bin must be on PATH)
+make uninstall [PREFIX=...]  # remove installed files
+make system-deps              # apt-install openjdk-21-jre (prompts for sudo)
+make run | make clean | make help
+```
+Install layout: `<prefix>/lib/notebook-ai/{bin,lib,models}`,
+launcher at `<prefix>/bin/notebook-ai`. After
+`make install PREFIX=$HOME/.local` the `notebook-ai` command works from any
+directory (models resolve from the install dir; `NOTEBOOK_AI_MODELS`
+overrides). For a system-wide install: `sudo make install`.
+
 ## Supported input
 JPG/JPEG and PNG. EXIF orientation is applied (phone photos come out
 upright); coordinates refer to the oriented image. Single-column reading

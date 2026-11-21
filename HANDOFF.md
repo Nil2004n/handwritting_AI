@@ -112,6 +112,17 @@ Intentionally untouched: PaddleOCR/ONNX names, model files/checksums/dicts,
 third-party license, `archive/android-rn-phase0` tag, historical commits
 (which still say NotebookOCR).
 
+## Global install note (2026-11-21)
+`Makefile` added (`build/test/verify/recognize/run/clean/install/uninstall/system-deps/help`).
+`ModelConfig.modelsDir` now honors `NOTEBOOK_AI_MODELS` (else CWD/models,
+unchanged). Installed to `~/.local` (no root): `notebook-ai` resolves on
+PATH from any directory; OcrSetupCheck via installed jars from /tmp loads
+both sessions (exit 0); GUI launches with `notebook-ai` title, screenshot
+verified. `make uninstall` verified (command gone), then reinstalled.
+System-wide equivalent: `sudo make install` (needs the user's password;
+no passwordless sudo here). `make system-deps` opt-in apt-installs
+openjdk-21-jre. No runtime downloads, no version changes.
+
 ## Commit
 Phase 1 commit on `main` (see `git log`). Models stay git-ignored;
 no push.

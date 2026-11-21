@@ -39,7 +39,17 @@ public final class ModelConfig {
 
     private ModelConfig() {}
 
+    /**
+     * Resolves the models directory. {@code NOTEBOOK_AI_MODELS}, when set to
+     * a directory, wins (used by system-wide installs); otherwise the
+     * {@code models} directory under the given project root is used, so
+     * running from a source checkout keeps working unchanged.
+     */
     public static Path modelsDir(Path projectRoot) {
+        String env = System.getenv("NOTEBOOK_AI_MODELS");
+        if (env != null && !env.isBlank()) {
+            return Path.of(env);
+        }
         return projectRoot.resolve("models");
     }
 
