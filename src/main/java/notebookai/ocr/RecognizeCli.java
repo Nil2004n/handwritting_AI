@@ -43,6 +43,7 @@ public final class RecognizeCli {
                     debugDirArg == null
                             ? service.recognize(Paths.get(imageArg))
                             : service.recognize(Paths.get(imageArg), Paths.get(debugDirArg));
+            System.out.println(service.identity());
             System.out.println("Image: " + imageArg);
             System.out.println("Size: " + result.imageWidth() + "x" + result.imageHeight());
             System.out.println("Regions: " + result.regions().size());

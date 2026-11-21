@@ -155,3 +155,14 @@ including regions dropped by drop_score):
 Diagnostics: `./gradlew recognizeImage -Pimage=<line-crop.png> -PrecOnly=1` runs the recognizer alone.
 Known limit: the padded crop for the large cursive third line reads poorly (model/crop-context
 limit, not a pipeline defect); the unpadded core crop reads noticeably better.
+
+## Stale-install incident (after fa654ec)
+Symptom: user still saw the pre-fix transcript after `make build && sudo make install`.
+Cause: not the code. `~/.local/bin` precedes `/usr/local/bin` on PATH, and an older user-local
+install (11:33, jar had no `ReadingOrder`/`DebugTrace` classes) shadowed the freshly installed
+system copy. Source CLI, staged dist and `/usr/local` all gave the fixed transcript; only
+`~/.local` gave the old one (proved by jar hashes, bytecode listing and running each copy).
+Changes: `make install` now deletes only the app-owned `<prefix>/lib/notebook-ai/{bin,lib}`
+(path-validated) before copying, so stale jars cannot survive, and warns when another
+`notebook-ai` earlier on PATH shadows the one just installed. The CLI prints, and the UI status
+line shows, a build identity (jar path, models dir, detector score mode).

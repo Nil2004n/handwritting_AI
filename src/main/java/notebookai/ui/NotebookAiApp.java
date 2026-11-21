@@ -47,6 +47,7 @@ public class NotebookAiApp extends Application {
     private boolean jobRunning;
     private boolean userEdited;
     private String lastRawText = "";
+    private volatile String lastIdentity = "";
 
     @Override
     public void start(Stage stage) {
@@ -145,6 +146,7 @@ public class NotebookAiApp extends Application {
             OcrResult result;
             try (OcrService service = OcrService.open(Paths.get("").toAbsolutePath())) {
                 result = service.recognize(image);
+                lastIdentity = service.identity();
             } catch (OcrException e) {
                 String message = e.getMessage();
                 Platform.runLater(() -> finishJob(null, "Extraction failed: " + message));
@@ -175,7 +177,7 @@ public class NotebookAiApp extends Application {
         copyButton.setDisable(lastRawText.isEmpty());
         statusLabel.setText(
                 "Done: " + result.regions().size() + " region(s), "
-                        + Math.round(result.timings().totalMs()) + " ms total.");
+                        + Math.round(result.timings().totalMs()) + " ms total. " + lastIdentity);
     }
 
     private void copyText() {

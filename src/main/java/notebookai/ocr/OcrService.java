@@ -38,6 +38,24 @@ public final class OcrService implements AutoCloseable {
      */
     static final DbPostprocess.ScoreMode SCORE_MODE = DbPostprocess.ScoreMode.SLOW;
 
+    /** One-line build identity: application jar, models directory, detector score mode. */
+    public String identity() {
+        String where;
+        try {
+            where =
+                    java.nio.file.Paths.get(
+                                    OcrService.class
+                                            .getProtectionDomain()
+                                            .getCodeSource()
+                                            .getLocation()
+                                            .toURI())
+                            .toString();
+        } catch (Exception e) {
+            where = "unknown";
+        }
+        return "build: " + where + " | models: " + modelsDir + " | det score: " + SCORE_MODE;
+    }
+
     private final OrtEnvironment env;
     private final OrtSession det;
     private final OrtSession rec;

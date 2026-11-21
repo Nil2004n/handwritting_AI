@@ -98,6 +98,8 @@ install: check-dist check-models
 		echo "  sudo make install"; \
 		exit 1; \
 	fi
+	@case "$(APP_DIR)" in */lib/notebook-ai) ;; *) echo "error: refusing unsafe APP_DIR '$(APP_DIR)'"; exit 1;; esac
+	rm -rf "$(APP_DIR)/bin" "$(APP_DIR)/lib"   # app-owned dirs only: no stale jars survive an upgrade
 	install -d "$(APP_DIR)/models" "$(BIN_DIR)"
 	cp -r build/install/notebook-ai/bin build/install/notebook-ai/lib "$(APP_DIR)/"
 	cp models/det.onnx models/det.yml models/rec.onnx models/rec.yml \
@@ -117,6 +119,12 @@ install: check-dist check-models
 		> "$(BIN_DIR)/notebook-ai"
 	chmod 755 "$(BIN_DIR)/notebook-ai"
 	@echo "Installed: $(BIN_DIR)/notebook-ai  (ensure $(PREFIX)/bin is on PATH)"
+	@first="$$(command -v notebook-ai 2>/dev/null)"; \
+	if [ -n "$$first" ] && [ "$$first" != "$(BIN_DIR)/notebook-ai" ] && [ -z "$(DESTDIR)" ]; then \
+		echo "WARNING: 'notebook-ai' on your PATH resolves to $$first, NOT the copy just installed."; \
+		echo "         That older copy will keep running. Update or remove it, e.g.:"; \
+		echo "           make install PREFIX=$$(dirname $$(dirname $$first))"; \
+	fi
 
 uninstall:
 	rm -rf "$(APP_DIR)" "$(BIN_DIR)/notebook-ai"
