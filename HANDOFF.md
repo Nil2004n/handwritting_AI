@@ -747,3 +747,26 @@ user. It was renamed aside to `build-old-rootowned/` (excluded via `.git/info/ex
 No crash-durability guarantee; no autosave; no batch OCR; no PDF/DOCX; no multi-user locking of a project file; no undo of page
 removal beyond not saving; thumbnails are regenerated on open (a render per page); project files can be large (all original images).
 Phase 4 status: **Accepted** (required acceptance checks passed; unverified paths are listed above).
+
+## Phase 5: reliability, hardening, release verification (2026-11-22) — PLAN (written before implementation)
+Checkpoint: `main` = `origin/main` = `042d267` (Phase 4 accepted; its three commits were reviewed — no private data, binaries,
+models or paths — and pushed without force). Phase 5 commits stay local. Preserved, not touched: `build-old-rootowned/` (+ its root-
+owned leftover and its `.git/info/exclude` line), the `cand` trial-evidence folder, private evaluation data, user projects/exports.
+Priority order: data loss / corruption / unsafe filesystem behaviour / stuck-application defects first, cosmetics last.
+Scope and acceptance criteria:
+1. **Background-job lifecycle.** Every worker (OCR, import, project open, save) must always deliver exactly one completion to the UI
+   thread, even for `Error`s (OOM, linkage), so the application can never stay busy. Acceptance: deterministic tests with injected
+   executors for success / exception / Error / ordering; controls restored in all cases.
+2. **Shutdown policy.** Native inference cannot be interrupted safely, so closing while a task runs = "wait, then ask": the window
+   closes after the task finishes, unsaved-change prompts preserved; no cancellation is claimed; OCR sessions are closed in `stop()`.
+   Acceptance: pure policy tests + real-GUI checks of close during OCR, during save and with unsaved changes.
+3. **Saving while state changes.** Save-then-proceed must not discard edits made after the saved snapshot. Acceptance: threaded test
+   with a latch inside the save, out-of-order completion test, real-GUI check with a large project.
+4. **Reconstruction integrity.** Working image rebuilt from original + prep must equal the interactive working image (dimensions and
+   pixels) for combined sequences; saved crops/regions that do not fit the rebuilt image are discarded visibly, never shown stale.
+5. **Resource limits.** Make limits configurable for tests; define what each measures; boundary tests at +-1; a decoded-memory guard
+   that refuses an image BEFORE a dangerous allocation; bounded generated-image stress test with honest scale.
+6. **Build/install safeguards.** Gradle-calling `make` targets refuse to run as root; `make install` never builds; actionable messages;
+   verified with a temporary user-owned prefix. No sudo, no change to `/usr/local`.
+7. **Preserve OCR behaviour** (models, decoder, experiments off, preprocessing): verified by the manifests, not assumed.
+8. **Installed-app release verification** on a private display, final docs, release assessment (no tag/release/installer).
