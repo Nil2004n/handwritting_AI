@@ -159,6 +159,23 @@ tasks.register('evaluate', JavaExec) {
     description = 'Runs CER/WER evaluation: -PevalManifest=eval/cases.tsv [--debugDir=...].'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'notebookai.eval.Evaluate'
+    if (project.hasProperty('expJvm')) {
+        jvmArgs project.property('expJvm').split(' ')  // opt-in experiment flags, e.g. -Dnotebookai.exp.cropPad=0.5
+    }
+    if (project.hasProperty('evalManifest')) {
+        args '--manifest', project.property('evalManifest')
+    }
+    if (project.hasProperty('debugDir')) {
+        args '--debug-dir', project.property('debugDir')
+    }
+}
+
+// Phase 3b diagnostic: raw recognizer output + character-aligned error explanation per manifest case.
+tasks.register('ctcProbe', JavaExec) {
+    group = 'verification'
+    description = 'CTC output diagnostics: -PevalManifest=eval/cases.tsv [-PdebugDir=DIR].'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookai.ocr.CtcProbe'
     if (project.hasProperty('evalManifest')) {
         args '--manifest', project.property('evalManifest')
     }

@@ -53,7 +53,8 @@ public final class OcrService implements AutoCloseable {
         } catch (Exception e) {
             where = "unknown";
         }
-        return "build: " + where + " | models: " + modelsDir + " | det score: " + SCORE_MODE;
+        return "build: " + where + " | models: " + modelsDir + " | det score: " + SCORE_MODE
+                + (Experiments.any() ? " | " + Experiments.describe() : "");
     }
 
     private final OrtEnvironment env;
@@ -194,7 +195,7 @@ public final class OcrService implements AutoCloseable {
         for (int i = 0; i < n; i++) {
             double[][] poly = ordered.get(i);
             long tc = System.nanoTime();
-            crops[i] = CropOps.rotateCrop(bgr, width, height, poly);
+            crops[i] = CropOps.rotateCrop(bgr, width, height, cropPolygon(quads.get(i), poly));
             cropMs += (System.nanoTime() - tc) / 1e6;
 
             long tr = System.nanoTime();
@@ -338,6 +339,43 @@ public final class OcrService implements AutoCloseable {
     }
 
     private CtcDecoder.Line recognizeCrop(RecPreprocess.RecInput input) throws OcrException {
+        float[][] logits = runRecognizer(input);
+        CtcDecoder.Line greedy = CtcDecoder.decode(logits, decodeTable);
+        int beam = Experiments.beamWidth();
+        if (beam > 0) { // EXPERIMENT (opt-in): alternate decoder, greedy score kept for filtering.
+            return new CtcDecoder.Line(CtcDecoder.decodeBeam(logits, decodeTable, beam), greedy.score());
+        }
+        return greedy;
+    }
+
+    /**
+     * Diagnostic: the raw recognizer output [steps][classes] for a crop, using
+     * exactly the production preprocessing and session. Production decoding
+     * is unchanged (it decodes the same array); this only exposes it.
+     */
+    public float[][] recognizeLogits(byte[] bgr, int width, int height) throws OcrException {
+        return runRecognizer(RecPreprocess.preprocess(bgr, width, height));
+    }
+
+    /**
+     * Recognizer crop corners. Production: the detected (unclipped) polygon. EXPERIMENT (opt-in,
+     * {@link Experiments#cropPad()} &lt; 1): core + lambda * (polygon - core), same corner order.
+     */
+    private static double[][] cropPolygon(DbPostprocess.Quad quad, double[][] poly) {
+        double lambda = Experiments.cropPad();
+        if (lambda >= 1.0 || quad.core() == null) {
+            return poly;
+        }
+        double[][] out = new double[4][2];
+        for (int k = 0; k < 4; k++) {
+            for (int a = 0; a < 2; a++) {
+                out[k][a] = quad.core()[k][a] + lambda * (poly[k][a] - quad.core()[k][a]);
+            }
+        }
+        return out;
+    }
+
+    private float[][] runRecognizer(RecPreprocess.RecInput input) throws OcrException {
         Map<String, OnnxTensor> inputs = new HashMap<>();
         FloatBuffer buffer = FloatBuffer.wrap(input.chw());
         try (OnnxTensor tensor =
@@ -350,7 +388,7 @@ public final class OcrService implements AutoCloseable {
                     throw new OcrException(
                             "Unexpected recognizer output tensor (expected float[1][steps][classes]).");
                 }
-                return CtcDecoder.decode(logits[0], decodeTable);
+                return logits[0];
             } catch (OrtException e) {
                 throw new OcrException("Recognizer inference failed: " + e.getMessage(), e);
             }
