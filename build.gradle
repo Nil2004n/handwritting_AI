@@ -226,6 +226,14 @@ tasks.register('spellingGuiAcceptance', JavaExec) {
     }
 }
 
+tasks.register('spellingPerf', JavaExec) {
+    group = 'verification'
+    description = 'Bounded spelling performance/robustness measurements on generated text (desktop JVM).'
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'notebookai.assist.SpellingPerf'
+}
+
 tasks.register('boundaryFingerprint', JavaExec) {
     group = 'verification'
     description = 'Canonical per-boundary hashes (decode, tensors, geometry, raw text): -Pimages=a.png,b.jpg [-PhashOnly=true]. For before/after refactor comparison.'
