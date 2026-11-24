@@ -347,10 +347,32 @@ trap 'exit 143' TERM HUP
 
 do_install() {
     PLAT=$(host_platform) || exit 1
-    DIST=${DIST_ARG:-$SELF_DIR/build/install/notebook-ai}
-    MODELS=${MODELS_ARG:-$SELF_DIR/models}
+    # Packaged mode: this script sits inside an extracted release distribution (distribution.json + app/).
+    # It then installs only from those files: no source tree, no Gradle, no network.
+    PKG=0
+    if [ -f "$SELF_DIR/distribution.json" ] && [ -x "$SELF_DIR/app/bin/notebook-ai" ]; then PKG=1; fi
+    if [ "$PKG" = 1 ]; then
+        DIST=${DIST_ARG:-$SELF_DIR/app}
+        MODELS=${MODELS_ARG:-$SELF_DIR/app/models}
+        HINT_DIST="this extracted distribution is incomplete or damaged: extract the archive again (verify it against its .sha256 file first)"
+        HINT_MODELS=$HINT_DIST
+        REBUILD="Re-extract the archive."
+        REMODEL="Re-extract the archive."
+    else
+        REBUILD="Rebuild: make build"
+        REMODEL="Re-run: make models"
+        DIST=${DIST_ARG:-$SELF_DIR/build/install/notebook-ai}
+        MODELS=${MODELS_ARG:-$SELF_DIR/models}
+        HINT_DIST="Build it first as your normal user (do NOT use sudo):
+         make build        (or: ./gradlew installDist, or: sh install.sh --build)"
+        HINT_MODELS="Prepare the models first (needs network once, as your normal user):
+         make models        (or: sh tools/download-models.sh)"
+    fi
 
     # ---- optional build (explicit opt-in; never as root) ----
+    if [ "$DO_BUILD" = 1 ] && [ "$PKG" = 1 ]; then
+        die "--build is not available in a packaged distribution (it contains no source code)."
+    fi
     if [ "$DO_BUILD" = 1 ]; then
         [ "$UID_NOW" != 0 ] || die "--build refuses to run Gradle as root. Build as your normal user, then install."
         [ -x "$SELF_DIR/gradlew" ] || die "gradlew not found next to install.sh"
@@ -362,25 +384,29 @@ do_install() {
     fi
 
     # ---- prerequisites (nothing is modified before all of these pass) ----
-    [ -d "$DIST" ] || die "no staged distribution at '$DIST'. Build it first as your normal user (do NOT use sudo):
-         make build        (or: ./gradlew installDist, or: sh install.sh --build)"
-    [ -x "$DIST/bin/notebook-ai" ] || die "'$DIST' is not a complete distribution (bin/notebook-ai missing). Rebuild: make build"
-    [ -f "$DIST/PLATFORM" ] || die "'$DIST' has no PLATFORM file; it was not built by this version of the build. Rebuild: make build"
+    if [ "$PKG" = 1 ]; then
+        [ -f "$SELF_DIR/SHA256SUMS" ] || die "SHA256SUMS is missing from the distribution; $HINT_DIST"
+        ( cd "$SELF_DIR" && sha256sum -c --quiet SHA256SUMS >/dev/null 2>&1 ) || die "the extracted distribution failed its SHA256SUMS integrity check; $HINT_DIST"
+        pjson=$(sed -n 's/.*"targetPlatform"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SELF_DIR/distribution.json" | sed -n 1p)
+        [ "$pjson" = "$PLAT" ] || die "this distribution is for '$pjson', but this machine is '$PLAT'. Use the matching distribution."
+    fi
+    [ -d "$DIST" ] || die "no staged distribution at '$DIST'. $HINT_DIST"
+    [ -x "$DIST/bin/notebook-ai" ] || die "'$DIST' is not a complete distribution (bin/notebook-ai missing). $REBUILD"
+    [ -f "$DIST/PLATFORM" ] || die "'$DIST' has no PLATFORM file; it was not built by this version of the build. $REBUILD"
     dplat=$(sed -n 's/^platform=//p' "$DIST/PLATFORM" | sed -n 1p)
     [ "$dplat" = "$PLAT" ] || die "the staged distribution is for '$dplat', but this machine is '$PLAT'. Rebuild on this machine: make build"
     njar=$(ls "$DIST"/lib/notebook-ai-*.jar 2>/dev/null | wc -l)
-    [ "$njar" -eq 1 ] || die "'$DIST/lib' must contain exactly one notebook-ai-*.jar (found $njar). Rebuild: make build"
-    [ -f "$DIST/lib/onnxruntime-1.22.0.jar" ] || ls "$DIST"/lib/onnxruntime-*.jar >/dev/null 2>&1 || die "ONNX Runtime jar missing from '$DIST/lib'. Rebuild: make build"
-    ls "$DIST"/lib/javafx-graphics-*-linux.jar >/dev/null 2>&1 || die "no Linux JavaFX jars in '$DIST/lib' (wrong platform build?). Rebuild: make build"
+    [ "$njar" -eq 1 ] || die "'$DIST/lib' must contain exactly one notebook-ai-*.jar (found $njar). $REBUILD"
+    [ -f "$DIST/lib/onnxruntime-1.22.0.jar" ] || ls "$DIST"/lib/onnxruntime-*.jar >/dev/null 2>&1 || die "ONNX Runtime jar missing from '$DIST/lib'. $REBUILD"
+    ls "$DIST"/lib/javafx-graphics-*-linux.jar >/dev/null 2>&1 || die "no Linux JavaFX jars in '$DIST/lib' (wrong platform build?). $REBUILD"
     for other in win mac mac-aarch64 linux-aarch64; do
-        if ls "$DIST"/lib/javafx-*-"$other".jar >/dev/null 2>&1; then die "'$DIST' contains JavaFX jars for another operating system ($other). Rebuild: make build"; fi
+        if ls "$DIST"/lib/javafx-*-"$other".jar >/dev/null 2>&1; then die "'$DIST' contains JavaFX jars for another operating system ($other). $REBUILD"; fi
     done
 
     for f in det.onnx det.yml rec.onnx rec.yml checksums.sha256; do
-        [ -f "$MODELS/$f" ] || die "model file '$MODELS/$f' is missing. Prepare the models first (needs network once, as your normal user):
-         make models        (or: sh tools/download-models.sh)"
+        [ -f "$MODELS/$f" ] || die "model file '$MODELS/$f' is missing. $HINT_MODELS"
     done
-    ( cd "$MODELS" && sha256sum -c --quiet checksums.sha256 >/dev/null 2>&1 ) || die "model checksum verification failed in '$MODELS'. Re-run: make models"
+    ( cd "$MODELS" && sha256sum -c --quiet checksums.sha256 >/dev/null 2>&1 ) || die "model checksum verification failed in '$MODELS'. $REMODEL"
 
     if [ -n "${JAVA_HOME:-}" ] && [ ! -x "$JAVA_HOME/bin/java" ]; then
         die "JAVA_HOME is set to '$JAVA_HOME' but '$JAVA_HOME/bin/java' is not executable. Fix or unset JAVA_HOME."
@@ -425,19 +451,27 @@ do_install() {
     mkdir -- "$TMP_DIR" || die "cannot create the staging directory '$TMP_DIR'"
     : > "$TMP_DIR/$MARKER" || die "cannot write into '$TMP_DIR'"
     mkdir -- "$TMP_DIR/dist" "$TMP_DIR/models" || die "cannot create staging subdirectories"
-    cp -R -- "$DIST/." "$TMP_DIR/dist/" || die "copying the distribution failed (disk full or permission problem); the previous installation is untouched"
+    for e in bin lib PLATFORM; do
+        cp -R -- "$DIST/$e" "$TMP_DIR/dist/$e" || die "copying the distribution failed (disk full or permission problem); the previous installation is untouched"
+    done
     for f in det.onnx det.yml rec.onnx rec.yml checksums.sha256; do
         cp -- "$MODELS/$f" "$TMP_DIR/models/$f" || die "copying model file $f failed; the previous installation is untouched"
     done
 
     # identity check: every copied file must match the source byte for byte (by SHA-256)
-    manifest_of_tree "$DIST" dist > "$TMP_DIR/.src.manifest" || die "cannot hash the source distribution"
+    ( cd "$DIST" && find bin lib PLATFORM -type f -exec sha256sum {} + ) | sed 's|  |  dist/|' | sort -k2 > "$TMP_DIR/.src.manifest" || die "cannot hash the source distribution"
     ( cd "$MODELS" && sha256sum det.onnx det.yml rec.onnx rec.yml checksums.sha256 ) | sed 's|  |  models/|' | sort -k2 >> "$TMP_DIR/.src.manifest"
     sort -k2 -o "$TMP_DIR/.src.manifest" "$TMP_DIR/.src.manifest"
-    manifest_of_tree "$TMP_DIR/dist" dist > "$TMP_DIR/.copy.manifest"
+    ( cd "$TMP_DIR/dist" && find bin lib PLATFORM -type f -exec sha256sum {} + ) | sed 's|  |  dist/|' | sort -k2 > "$TMP_DIR/.copy.manifest"
     manifest_of_tree "$TMP_DIR/models" models >> "$TMP_DIR/.copy.manifest"
     sort -k2 -o "$TMP_DIR/.copy.manifest" "$TMP_DIR/.copy.manifest"
     cmp -s "$TMP_DIR/.src.manifest" "$TMP_DIR/.copy.manifest" || die "the copied files do not match the source distribution; nothing was replaced"
+    # license documents (present in a release distribution; LICENSE only when running from a source checkout)
+    mkdir -- "$TMP_DIR/legal" || die "cannot create the legal directory"
+    [ -f "$SELF_DIR/LICENSE" ] && { cp -- "$SELF_DIR/LICENSE" "$TMP_DIR/legal/LICENSE" || die "cannot copy LICENSE"; }
+    [ -f "$SELF_DIR/THIRD-PARTY-NOTICES.txt" ] && { cp -- "$SELF_DIR/THIRD-PARTY-NOTICES.txt" "$TMP_DIR/legal/THIRD-PARTY-NOTICES.txt" || die "cannot copy THIRD-PARTY-NOTICES.txt"; }
+    [ -d "$SELF_DIR/licenses" ] && { cp -R -- "$SELF_DIR/licenses" "$TMP_DIR/legal/licenses" || die "cannot copy licenses"; }
+    if [ -n "$(ls -A "$TMP_DIR/legal")" ]; then manifest_of_tree "$TMP_DIR/legal" legal >> "$TMP_DIR/.copy.manifest"; sort -k2 -o "$TMP_DIR/.copy.manifest" "$TMP_DIR/.copy.manifest"; else rmdir -- "$TMP_DIR/legal"; fi
     mv -- "$TMP_DIR/.copy.manifest" "$TMP_DIR/MANIFEST.sha256" && rm -f -- "$TMP_DIR/.src.manifest"
     [ -x "$TMP_DIR/dist/bin/notebook-ai" ] || chmod 755 "$TMP_DIR/dist/bin/notebook-ai" || die "cannot make the start script executable"
 
@@ -454,42 +488,18 @@ do_install() {
 
     # launcher candidate (written beside the final command so the final rename is atomic)
     TMP_CMD=$BIN/.notebook-ai.new.$$
+    FRAG=$SELF_DIR/scripts/launcher-body.sh
+    [ -f "$FRAG" ] || FRAG=$SELF_DIR/packaging/launcher-body.sh
+    [ -f "$FRAG" ] || die "the shared launcher template (scripts/launcher-body.sh) is missing next to install.sh; $HINT_DIST"
     {
         printf '#!/bin/sh\n'
         printf '%s\n' "$LAUNCHER_MARK"
         printf '# Generated by install.sh; reinstall to regenerate. Runs the installed copy only.\n'
         printf 'NBAI_APP=%s\n' "$(sq "$APP_FINAL")"
-        cat <<'EOS'
-nbai_major() { "$1" -version 2>&1 | sed -n 's/.*version "\([0-9][0-9]*\).*/\1/p' | sed -n 1p; }
-nbai_fail() { printf 'notebook-ai: %s\n' "$1" >&2; exit 1; }
-if [ ! -x "$NBAI_APP/dist/bin/notebook-ai" ]; then
-    nbai_fail "the installation at $NBAI_APP is missing or damaged; reinstall it (sh install.sh)"
-fi
-if [ -n "${JAVA_HOME:-}" ]; then
-    NBAI_JAVA=$JAVA_HOME/bin/java
-    [ -x "$NBAI_JAVA" ] || nbai_fail "JAVA_HOME is set to '$JAVA_HOME' but '$NBAI_JAVA' is not executable"
-else
-    NBAI_JAVA=$(command -v java 2>/dev/null) || NBAI_JAVA=
-    NBAI_M=0
-    [ -n "$NBAI_JAVA" ] && NBAI_M=$(nbai_major "$NBAI_JAVA")
-    case "$NBAI_M" in ''|*[!0-9]*) NBAI_M=0 ;; esac
-    NBAI_FB=${NOTEBOOK_AI_JDK_FALLBACK:-/usr/lib/jvm/java-21-openjdk-amd64}
-    if [ "$NBAI_M" -lt 21 ] && [ -x "$NBAI_FB/bin/java" ]; then
-        JAVA_HOME=$NBAI_FB
-        export JAVA_HOME
-        NBAI_JAVA=$JAVA_HOME/bin/java
-    fi
-    [ -n "$NBAI_JAVA" ] || nbai_fail "Java 21 or newer was not found. Install a Java 21+ runtime or set JAVA_HOME."
-fi
-NBAI_M=$(nbai_major "$NBAI_JAVA")
-case "$NBAI_M" in ''|*[!0-9]*) nbai_fail "could not determine the Java version of '$NBAI_JAVA'" ;; esac
-[ "$NBAI_M" -ge 21 ] || nbai_fail "Java $NBAI_M found at '$NBAI_JAVA'; Java 21 or newer is required (set JAVA_HOME to a newer JDK/JRE)."
-if [ -z "${NOTEBOOK_AI_MODELS:-}" ]; then
-    NOTEBOOK_AI_MODELS=$NBAI_APP/models
-    export NOTEBOOK_AI_MODELS
-fi
-exec "$NBAI_APP/dist/bin/notebook-ai" "$@"
-EOS
+        printf 'NBAI_START="$NBAI_APP/dist/bin/notebook-ai"\n'
+        printf 'NBAI_MODELS="$NBAI_APP/models"\n'
+        printf 'NBAI_HINT="reinstall it (sh install.sh)"\n'
+        cat "$FRAG" || exit 1
     } > "$TMP_CMD" || die "cannot write the command file in '$BIN'"
     chmod 755 "$TMP_CMD" || die "cannot make the command executable"
 

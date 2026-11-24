@@ -89,8 +89,8 @@ T '[text] wrapper uses CRLF line endings only' (($w -replace "`r`n", '') -notmat
 $wl = $w -split "`r`n"
 T '[text] wrapper line 2 is the ownership marker' ($wl[1] -eq 'rem notebook-ai-launcher: owned-by=notebook-ai-installer format=1')
 T '[text] wrapper is ASCII only' ($w -notmatch '[^\x00-\x7F]')
-T '[text] wrapper forwards all arguments and returns the exit code' ($w.Contains('call "%NBAI_APP%\dist\bin\notebook-ai.bat" %*') -and $w.Contains('endlocal & exit /b %NBAI_RC%'))
-T '[text] wrapper locates the app relative to itself and defaults the models dir' ($w.Contains('"%~dp0.."') -and $w.Contains('NOTEBOOK_AI_MODELS=%NBAI_APP%\models'))
+T '[text] wrapper forwards all arguments and returns the exit code' ($w.Contains('call "%NBAI_START%" %*') -and $w.Contains('endlocal & exit /b %NBAI_RC%'))
+T '[text] wrapper locates the app relative to itself and defaults the models dir' ($w.Contains('"%~dp0.."') -and $w.Contains('NBAI_START=%NBAI_APP%\dist\bin\notebook-ai.bat') -and $w.Contains('NBAI_MODELS=%NBAI_APP%\models') -and $w.Contains('NOTEBOOK_AI_MODELS=%NBAI_MODELS%'))
 T '[text] wrapper bakes in no absolute install or repository path' ($w -notmatch '[A-Za-z]:\\(Users|src|build)')
 T '[text] wrapper checks Java >= 21 and fails open when the version cannot be parsed' ($w.Contains('LSS 21') -and $w.Contains('if not defined NBAI_MAJ goto :launch'))
 

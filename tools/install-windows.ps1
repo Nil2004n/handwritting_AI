@@ -14,12 +14,13 @@ $script:Marker = '.notebook-ai-install'
 $script:LauncherMark = 'rem notebook-ai-launcher: owned-by=notebook-ai-installer format=1'
 $script:MinJava = 21
 $script:PreviousPathAdded = $null
+$script:Pkg = $false
 $script:RepoDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 function Test-TestMode { return ($env:NBAI_TEST_MODE -eq '1') }
 
 # Joins path components one at a time with the host's separator; components may themselves contain \ or /.
-# (Join-Path with an embedded backslash is only correct on Windows; this keeps the logic testable under pwsh on Linux.)
+# (PJ with an embedded backslash is only correct on Windows; this keeps the logic testable under pwsh on Linux.)
 function PJ {
     $p = [string]$args[0]
     for ($i = 1; $i -lt $args.Count; $i++) {
@@ -194,7 +195,7 @@ function Find-Java {
     if ($env:JAVA_HOME) {
         $j = PJ $env:JAVA_HOME 'bin\java.exe'
         if (Test-Path -LiteralPath $j) { return $j }
-        $j2 = Join-Path $env:JAVA_HOME 'bin/java'
+        $j2 = PJ $env:JAVA_HOME 'bin/java'
         if ((Test-TestMode) -and (Test-Path -LiteralPath $j2)) { return $j2 }
         Fail ("JAVA_HOME is set to '" + $env:JAVA_HOME + "' but no java executable was found in its bin directory. Fix or unset JAVA_HOME.")
     }
@@ -213,49 +214,69 @@ function Get-JavaMajor([string]$javaExe) {
 
 function Test-ModelsValid([string]$dir) {
     foreach ($f in 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml', 'checksums.sha256') {
-        if (-not (Test-Path -LiteralPath (Join-Path $dir $f) -PathType Leaf)) {
-            Fail ("model file '" + (Join-Path $dir $f) + "' is missing. Prepare the models first (network needed once, as your normal user):`n         powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1")
+        if (-not (Test-Path -LiteralPath (PJ $dir $f) -PathType Leaf)) {
+            if ($script:Pkg) { Fail ("model file '" + (PJ $dir $f) + "' is missing: this extracted distribution is incomplete; extract the archive again.") }
+            Fail ("model file '" + (PJ $dir $f) + "' is missing. Prepare the models first (network needed once, as your normal user):`n         powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1")
         }
     }
     $want = @{}
-    foreach ($line in [IO.File]::ReadAllLines((Join-Path $dir 'checksums.sha256'))) {
+    foreach ($line in [IO.File]::ReadAllLines((PJ $dir 'checksums.sha256'))) {
         if ($line -match '^([0-9a-fA-F]{64})\s+\*?(\S.*)$') { $want[$Matches[2].Trim()] = $Matches[1].ToLowerInvariant() }
     }
     foreach ($f in 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml') {
         if (-not $want.ContainsKey($f)) { Fail ("checksums.sha256 has no entry for " + $f) }
-        $got = (Get-FileHash -LiteralPath (Join-Path $dir $f) -Algorithm SHA256).Hash.ToLowerInvariant()
+        $got = (Get-FileHash -LiteralPath (PJ $dir $f) -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($got -ne $want[$f]) { Fail ("model checksum mismatch for " + $f + " in '" + $dir + "'. Re-download with tools\download-models.ps1") }
     }
 }
 
 function Test-DistValid([string]$dist, [string]$platform) {
+    if ($script:Pkg -and -not (Test-Path -LiteralPath $dist -PathType Container)) { Fail ("'" + $dist + "' is missing: this extracted distribution is incomplete; extract the archive again.") }
     if (-not (Test-Path -LiteralPath $dist -PathType Container)) {
         Fail ("no staged distribution at '" + $dist + "'. Build it first as your normal user (NOT elevated):`n         gradlew.bat installDist      (or on Linux: ./gradlew installDist -PtargetPlatform=win-x64)`n         or:  install.cmd --build")
     }
     if (-not (Test-Path -LiteralPath (PJ $dist 'bin\notebook-ai.bat') -PathType Leaf)) { Fail ("'" + $dist + "' is not a complete distribution (bin\notebook-ai.bat missing).") }
-    $pf = Join-Path $dist 'PLATFORM'
+    $pf = PJ $dist 'PLATFORM'
     if (-not (Test-Path -LiteralPath $pf -PathType Leaf)) { Fail ("'" + $dist + "' has no PLATFORM file; rebuild with this version of the build.") }
     $dplat = $null
     foreach ($l in [IO.File]::ReadAllLines($pf)) { if ($l -match '^platform=(.+)$') { $dplat = $Matches[1].Trim() } }
     if ($dplat -ne $platform) { Fail ("the staged distribution is for '" + $dplat + "', but this machine needs '" + $platform + "'. A Linux distribution cannot be installed on Windows. Rebuild with -PtargetPlatform=win-x64.") }
-    $jars = @(Get-ChildItem -LiteralPath (Join-Path $dist 'lib') -Filter 'notebook-ai-*.jar' -File -ErrorAction SilentlyContinue)
+    $jars = @(Get-ChildItem -LiteralPath (PJ $dist 'lib') -Filter 'notebook-ai-*.jar' -File -ErrorAction SilentlyContinue)
     if ($jars.Count -ne 1) { Fail ("'" + $dist + "\lib' must contain exactly one notebook-ai-*.jar (found " + $jars.Count + ").") }
-    if (@(Get-ChildItem -LiteralPath (Join-Path $dist 'lib') -Filter 'javafx-graphics-*-win.jar' -File -ErrorAction SilentlyContinue).Count -lt 1) { Fail 'no Windows JavaFX jars (javafx-graphics-*-win.jar) in the distribution.' }
-    if (@(Get-ChildItem -LiteralPath (Join-Path $dist 'lib') -Filter 'javafx-*-linux.jar' -File -ErrorAction SilentlyContinue).Count -gt 0) { Fail 'the distribution contains Linux JavaFX jars; it is not a Windows build.' }
-    if (@(Get-ChildItem -LiteralPath (Join-Path $dist 'lib') -Filter 'onnxruntime-*.jar' -File -ErrorAction SilentlyContinue).Count -lt 1) { Fail 'the ONNX Runtime jar is missing from the distribution.' }
+    if (@(Get-ChildItem -LiteralPath (PJ $dist 'lib') -Filter 'javafx-graphics-*-win.jar' -File -ErrorAction SilentlyContinue).Count -lt 1) { Fail 'no Windows JavaFX jars (javafx-graphics-*-win.jar) in the distribution.' }
+    if (@(Get-ChildItem -LiteralPath (PJ $dist 'lib') -Filter 'javafx-*-linux.jar' -File -ErrorAction SilentlyContinue).Count -gt 0) { Fail 'the distribution contains Linux JavaFX jars; it is not a Windows build.' }
+    if (@(Get-ChildItem -LiteralPath (PJ $dist 'lib') -Filter 'onnxruntime-*.jar' -File -ErrorAction SilentlyContinue).Count -lt 1) { Fail 'the ONNX Runtime jar is missing from the distribution.' }
 }
 
 # --------------------------------------------------------------------------------------------------
 # tree hashing / copying
 # --------------------------------------------------------------------------------------------------
-function Get-TreeHashes([string]$root) {
+function Get-TreeHashes([string]$root, [string[]]$only = @()) {
     $r = (Resolve-Path -LiteralPath $root).ProviderPath.TrimEnd('\', '/')
     $h = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $r -Recurse -File -Force)) {
         $rel = $f.FullName.Substring($r.Length + 1).Replace('\', '/')
+        if ($only.Count -gt 0) {
+            $top = $rel.Split('/')[0]
+            if ($only -notcontains $top) { continue }
+        }
         $h[$rel] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     return $h
+}
+
+# Release distribution: every shipped file must match SHA256SUMS before anything is installed.
+function Test-PackageIntegrity([string]$root) {
+    $sums = PJ $root 'SHA256SUMS'
+    if (-not (Test-Path -LiteralPath $sums -PathType Leaf)) { Fail 'SHA256SUMS is missing from the distribution; extract the archive again.' }
+    $bad = 0
+    foreach ($l in [IO.File]::ReadAllLines($sums)) {
+        if ($l -match '^([0-9a-fA-F]{64})  (.+)$') {
+            $p = PJ $root $Matches[2]
+            if (-not (Test-Path -LiteralPath $p -PathType Leaf) -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1].ToLowerInvariant()) { $bad++ }
+        }
+    }
+    if ($bad -gt 0) { Fail ('the extracted distribution failed its SHA256SUMS integrity check (' + $bad + ' file(s) differ or are missing); extract the archive again (verify the archive against its .sha256 file first).') }
 }
 
 function Test-SameHashes($a, $b) {
@@ -264,56 +285,32 @@ function Test-SameHashes($a, $b) {
     return $true
 }
 
+function Get-LauncherFragmentPath {
+    foreach ($rel in 'scripts\launcher-body.cmd', 'packaging\launcher-body.cmd') {
+        $p = PJ $script:RepoDir $rel
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+    }
+    Fail 'the shared launcher template (scripts\launcher-body.cmd) is missing next to the installer; extract the distribution again.'
+}
+
+# The installed command = a small header (paths) + the SINGLE-SOURCE launcher body shared with run-notebook-ai.cmd.
 function New-WrapperText {
-    $lines = @(
+    $head = @(
         '@echo off',
         $script:LauncherMark,
         'rem Generated by install.cmd. Do not edit; reinstall to regenerate. Runs the installed copy only.',
         'setlocal DisableDelayedExpansion',
         'for %%I in ("%~dp0..") do set "NBAI_APP=%%~fI"',
-        'if not exist "%NBAI_APP%\dist\bin\notebook-ai.bat" goto :missing',
-        'if defined JAVA_HOME goto :homejava',
-        'set "NBAI_JAVA="',
-        'for %%J in (java.exe) do set "NBAI_JAVA=%%~$PATH:J"',
-        'if not defined NBAI_JAVA goto :nojava',
-        'goto :checkver',
-        ':homejava',
-        'set "NBAI_JAVA=%JAVA_HOME:"=%\bin\java.exe"',
-        'if not exist "%NBAI_JAVA%" goto :badhome',
-        ':checkver',
-        'set "NBAI_JVF=%TEMP%\notebook-ai-jv-%RANDOM%%RANDOM%.txt"',
-        '"%NBAI_JAVA%" -version >"%NBAI_JVF%" 2>&1',
-        'set "NBAI_JV="',
-        'for /f "tokens=3" %%V in (''findstr /i /c:" version " "%NBAI_JVF%"'') do set "NBAI_JV=%%~V"',
-        'del "%NBAI_JVF%" >nul 2>&1',
-        'set "NBAI_MAJ="',
-        'if defined NBAI_JV for /f "delims=.-_+ tokens=1" %%M in ("%NBAI_JV%") do set "NBAI_MAJ=%%M"',
-        'if not defined NBAI_MAJ goto :launch',
-        'set /a NBAI_N=%NBAI_MAJ% 2>nul',
-        'if %NBAI_N% GTR 0 if %NBAI_N% LSS 21 goto :oldjava',
-        ':launch',
-        'if not defined NOTEBOOK_AI_MODELS set "NOTEBOOK_AI_MODELS=%NBAI_APP%\models"',
-        'call "%NBAI_APP%\dist\bin\notebook-ai.bat" %*',
-        'set "NBAI_RC=%ERRORLEVEL%"',
-        'endlocal & exit /b %NBAI_RC%',
-        ':missing',
-        'echo notebook-ai: the installation at "%NBAI_APP%" is missing or damaged; reinstall it with install.cmd 1>&2',
-        'endlocal & exit /b 1',
-        ':nojava',
-        'echo notebook-ai: Java 21 or newer was not found. Install a Java 21+ runtime or set JAVA_HOME. 1>&2',
-        'endlocal & exit /b 1',
-        ':badhome',
-        'echo notebook-ai: JAVA_HOME is set but "%NBAI_JAVA%" does not exist. 1>&2',
-        'endlocal & exit /b 1',
-        ':oldjava',
-        'echo notebook-ai: Java %NBAI_N% was found at "%NBAI_JAVA%"; Java 21 or newer is required (set JAVA_HOME to a newer JDK or JRE). 1>&2',
-        'endlocal & exit /b 1'
+        'set "NBAI_START=%NBAI_APP%\dist\bin\notebook-ai.bat"',
+        'set "NBAI_MODELS=%NBAI_APP%\models"',
+        'set "NBAI_HINT=reinstall it with install.cmd"'
     )
-    return (($lines -join "`r`n") + "`r`n")
+    $body = @([IO.File]::ReadAllText((Get-LauncherFragmentPath)) -split "\r?\n" | Where-Object { $_ -ne '' })
+    return ((($head + $body) -join "`r`n") + "`r`n")
 }
 
 function Read-OwnedState([string]$app) {
-    $f = Join-Path $app 'path-state.txt'
+    $f = PJ $app 'path-state.txt'
     if (Test-Path -LiteralPath $f) { foreach ($l in [IO.File]::ReadAllLines($f)) { if ($l -match '^path-entry-added=(.+)$') { return $Matches[1] } } }
     return $null
 }
@@ -363,7 +360,7 @@ function Resolve-Targets($o) {
         $known['user profile'] = $env:USERPROFILE
         foreach ($sub in 'Desktop', 'Downloads', 'Documents', 'Pictures', 'AppData', 'AppData\Local', 'AppData\Roaming') { $known[$sub] = (PJ $env:USERPROFILE $sub) }
     }
-    if ($localAppData) { $known['LocalAppData'] = $localAppData; $known['Programs'] = (Join-Path $localAppData 'Programs') }
+    if ($localAppData) { $known['LocalAppData'] = $localAppData; $known['Programs'] = (PJ $localAppData 'Programs') }
     foreach ($v in 'SystemRoot', 'ProgramFiles', 'ProgramData', 'ProgramFiles(x86)') { $val = [Environment]::GetEnvironmentVariable($v); if ($val) { $known[$v] = $val } }
     $why = Get-UnsafeTargetReason $app $script:RepoDir $known
     if ($why) { Fail ("refusing '" + $app + "' as the application directory: " + $why + '.') }
@@ -373,11 +370,11 @@ function Resolve-Targets($o) {
 function Invoke-Status([string]$app) {
     Say ("Application directory : " + $app)
     Say ("Command               : " + (PJ $app 'bin\notebook-ai.cmd'))
-    if (Test-Path -LiteralPath (Join-Path $app $script:Marker)) {
+    if (Test-Path -LiteralPath (PJ $app $script:Marker)) {
         Say 'Installation          : present (owned by notebook-ai installer)'
-        $inf = Join-Path $app 'INSTALL.info'
+        $inf = PJ $app 'INSTALL.info'
         if (Test-Path -LiteralPath $inf) { foreach ($l in [IO.File]::ReadAllLines($inf)) { Say ('  ' + $l) } }
-        $mf = Join-Path $app 'MANIFEST.sha256'
+        $mf = PJ $app 'MANIFEST.sha256'
         if (Test-Path -LiteralPath $mf) {
             $bad = 0
             foreach ($l in [IO.File]::ReadAllLines($mf)) {
@@ -395,8 +392,8 @@ function Invoke-Status([string]$app) {
 }
 
 function Invoke-Uninstall([string]$app) {
-    $bin = Join-Path $app 'bin'
-    if (Test-Path -LiteralPath (Join-Path $app $script:Marker)) {
+    $bin = PJ $app 'bin'
+    if (Test-Path -LiteralPath (PJ $app $script:Marker)) {
         $added = Read-OwnedState $app
         try { Remove-Item -LiteralPath $app -Recurse -Force } catch { Fail ("could not remove '" + $app + "'. Close Notebook-AI (and any terminal running it) and retry. " + $_.Exception.Message) }
         Say ('Removed application directory: ' + $app)
@@ -418,18 +415,29 @@ function Invoke-Uninstall([string]$app) {
 function Invoke-Install($o, [string]$app) {
     $plat = Get-HostPlatform
     if (Test-Elevated) { Fail 'refusing to run elevated (Administrator). This is a per-user install; run it from a normal Command Prompt. Gradle is never run elevated.' }
+    # Packaged mode: this script sits inside an extracted release distribution (distribution.json + app\).
+    $script:Pkg = ((Test-Path -LiteralPath (PJ $script:RepoDir 'distribution.json')) -and (Test-Path -LiteralPath (PJ $script:RepoDir 'app\bin\notebook-ai.bat')))
+    if ($script:Pkg -and $o.Build) { Fail '--build is not available in a packaged distribution (it contains no source code).' }
+    if ($script:Pkg) {
+        Test-PackageIntegrity $script:RepoDir
+        $dj = $null
+        try { $dj = (Get-Content -LiteralPath (PJ $script:RepoDir 'distribution.json') -Raw | ConvertFrom-Json).targetPlatform } catch { Fail 'distribution.json cannot be read; extract the archive again.' }
+        if ($dj -ne $plat) { Fail ("this distribution is for '" + $dj + "', but this machine needs '" + $plat + "'. Use the matching distribution.") }
+    }
     $dist = $o.Dist
+    if (-not $dist -and $script:Pkg) { $dist = PJ $script:RepoDir 'app' }
     if (-not $dist) {
         $d1 = PJ $script:RepoDir 'build\install\notebook-ai'
         $d2 = PJ $script:RepoDir 'build\install-win-x64\notebook-ai'
-        if (Test-Path -LiteralPath (Join-Path $d1 'PLATFORM')) { $dist = $d1 } else { $dist = $d2 }
+        if (Test-Path -LiteralPath (PJ $d1 'PLATFORM')) { $dist = $d1 } else { $dist = $d2 }
     }
     $models = $o.Models
-    if (-not $models) { $models = Join-Path $script:RepoDir 'models' }
+    if (-not $models -and $script:Pkg) { $models = PJ $script:RepoDir 'app\models' }
+    if (-not $models) { $models = PJ $script:RepoDir 'models' }
     foreach ($p in $dist, $models) { if (Test-ControlChars $p) { Fail 'a path contains a line break and cannot be handled safely' } }
 
     if ($o.Build) {
-        $g = Join-Path $script:RepoDir 'gradlew.bat'
+        $g = PJ $script:RepoDir 'gradlew.bat'
         if (-not (Test-Path -LiteralPath $g)) { Fail 'gradlew.bat not found next to install.cmd' }
         Say 'Building (runs Gradle; uses the network to fetch dependencies on first use)...'
         Push-Location -LiteralPath $script:RepoDir
@@ -451,7 +459,7 @@ function Invoke-Install($o, [string]$app) {
         if (-not (Test-Path -LiteralPath $app -PathType Container)) { Fail ("'" + $app + "' exists and is not a directory") }
         $item = Get-Item -LiteralPath $app -Force
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail ("'" + $app + "' is a link or junction; refusing (choose the real directory)") }
-        $owned = Test-Path -LiteralPath (Join-Path $app $script:Marker)
+        $owned = Test-Path -LiteralPath (PJ $app $script:Marker)
         $empty = (@(Get-ChildItem -LiteralPath $app -Force)).Count -eq 0
         if (-not $owned -and -not $empty) { Fail ("'" + $app + "' exists and is not a notebook-ai installation (no ownership marker). Refusing to modify it; choose another --app-dir.") }
     }
@@ -459,39 +467,48 @@ function Invoke-Install($o, [string]$app) {
     if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
 
     $stamp = [string]$PID
-    $tmp = Join-Path $parent ('.notebook-ai.installing.' + $stamp)
-    $prev = Join-Path $parent ('.notebook-ai.previous.' + $stamp)
+    $tmp = PJ $parent ('.notebook-ai.installing.' + $stamp)
+    $prev = PJ $parent ('.notebook-ai.previous.' + $stamp)
     if ((Test-Path -LiteralPath $tmp) -or (Test-Path -LiteralPath $prev)) { Fail 'temporary path collision; retry' }
     $swapped = $false
     try {
         New-Item -ItemType Directory -Path $tmp | Out-Null
-        New-Item -ItemType File -Path (Join-Path $tmp $script:Marker) | Out-Null
-        Copy-Item -LiteralPath $dist -Destination (Join-Path $tmp 'dist') -Recurse
-        New-Item -ItemType Directory -Path (Join-Path $tmp 'models') | Out-Null
+        New-Item -ItemType File -Path (PJ $tmp $script:Marker) | Out-Null
+        New-Item -ItemType Directory -Path (PJ $tmp 'dist') | Out-Null
+        foreach ($e in 'bin', 'lib', 'PLATFORM') { Copy-Item -LiteralPath (PJ $dist $e) -Destination (PJ $tmp ('dist\' + $e)) -Recurse }
+        New-Item -ItemType Directory -Path (PJ $tmp 'models') | Out-Null
         foreach ($f in 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml', 'checksums.sha256') { Copy-Item -LiteralPath (PJ $models $f) -Destination (PJ $tmp ('models\' + $f)) }
-        New-Item -ItemType Directory -Path (Join-Path $tmp 'bin') | Out-Null
+        New-Item -ItemType Directory -Path (PJ $tmp 'bin') | Out-Null
         [IO.File]::WriteAllText((PJ $tmp 'bin\notebook-ai.cmd'), (New-WrapperText), [Text.Encoding]::ASCII)
 
         # identity: every copied file must equal its source (SHA-256)
-        $srcD = Get-TreeHashes $dist
-        $cpyD = Get-TreeHashes (Join-Path $tmp 'dist')
+        $srcD = Get-TreeHashes $dist @('bin', 'lib', 'PLATFORM')
+        $cpyD = Get-TreeHashes (PJ $tmp 'dist')
         if (-not (Test-SameHashes $srcD $cpyD)) { Fail 'the copied distribution does not match the source; nothing was replaced' }
         $srcM = @{}
-        foreach ($f in 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml', 'checksums.sha256') { $srcM[$f] = (Get-FileHash -LiteralPath (Join-Path $models $f) -Algorithm SHA256).Hash.ToLowerInvariant() }
-        $cpyM = Get-TreeHashes (Join-Path $tmp 'models')
+        foreach ($f in 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml', 'checksums.sha256') { $srcM[$f] = (Get-FileHash -LiteralPath (PJ $models $f) -Algorithm SHA256).Hash.ToLowerInvariant() }
+        $cpyM = Get-TreeHashes (PJ $tmp 'models')
         if (-not (Test-SameHashes $srcM $cpyM)) { Fail 'the copied models do not match the source; nothing was replaced' }
+        # license documents (release distribution: LICENSE, THIRD-PARTY-NOTICES.txt, licenses\; source checkout: LICENSE only)
+        $legalDir = PJ $tmp 'legal'
+        New-Item -ItemType Directory -Path $legalDir | Out-Null
+        foreach ($f in 'LICENSE', 'THIRD-PARTY-NOTICES.txt') { $sp = PJ $script:RepoDir $f; if (Test-Path -LiteralPath $sp -PathType Leaf) { Copy-Item -LiteralPath $sp -Destination (PJ $legalDir $f) } }
+        $lsrc = PJ $script:RepoDir 'licenses'
+        if (Test-Path -LiteralPath $lsrc -PathType Container) { Copy-Item -LiteralPath $lsrc -Destination (PJ $legalDir 'licenses') -Recurse }
+        if (@(Get-ChildItem -LiteralPath $legalDir -Force).Count -eq 0) { Remove-Item -LiteralPath $legalDir -Force; $cpyL = @{} } else { $cpyL = Get-TreeHashes $legalDir }
         $mf = New-Object System.Collections.Generic.List[string]
         foreach ($k in ($cpyD.Keys | Sort-Object)) { $mf.Add($cpyD[$k] + '  dist/' + $k) }
         foreach ($k in ($cpyM.Keys | Sort-Object)) { $mf.Add($cpyM[$k] + '  models/' + $k) }
-        [IO.File]::WriteAllLines((Join-Path $tmp 'MANIFEST.sha256'), $mf.ToArray())
+        foreach ($k in ($cpyL.Keys | Sort-Object)) { $mf.Add($cpyL[$k] + '  legal/' + $k) }
+        [IO.File]::WriteAllLines((PJ $tmp 'MANIFEST.sha256'), $mf.ToArray())
         $mainJar = @(Get-ChildItem -LiteralPath (PJ $tmp 'dist\lib') -Filter 'notebook-ai-*.jar')[0]
         $info = @('app=notebook-ai')
-        foreach ($l in [IO.File]::ReadAllLines((Join-Path $dist 'PLATFORM'))) { if ($l -match '^(version|platform)=') { $info += $l } }
+        foreach ($l in [IO.File]::ReadAllLines((PJ $dist 'PLATFORM'))) { if ($l -match '^(version|platform)=') { $info += $l } }
         $info += ('main-jar-sha256=' + $cpyD[('lib/' + $mainJar.Name)])
         $info += ('installed-utc=' + [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))
         $info += ('java-at-install=' + $jmaj + ' (' + $java + ')')
         $info += ('command=' + (PJ $app 'bin\notebook-ai.cmd'))
-        [IO.File]::WriteAllLines((Join-Path $tmp 'INSTALL.info'), $info)
+        [IO.File]::WriteAllLines((PJ $tmp 'INSTALL.info'), $info)
 
         if ((Test-TestMode) -and $env:NBAI_TEST_FAIL_AT -eq 'stage') { Fail 'simulated failure after staging (test seam)' }
         # swap, keeping the previous installation until the new one is in place
@@ -507,15 +524,15 @@ function Invoke-Install($o, [string]$app) {
             if ($exists -and -not (Test-Path -LiteralPath $app)) { Move-Item -LiteralPath $prev -Destination $app }
             Fail ("could not put the new installation in place; the previous installation was restored. (" + $_.Exception.Message + ")")
         }
-        if ($exists -and (Test-Path -LiteralPath $prev) -and (Test-Path -LiteralPath (Join-Path $prev $script:Marker))) {
+        if ($exists -and (Test-Path -LiteralPath $prev) -and (Test-Path -LiteralPath (PJ $prev $script:Marker))) {
             try { Remove-Item -LiteralPath $prev -Recurse -Force } catch { SayWarn ("could not delete the old copy '" + $prev + "'; it is safe to delete manually.") }
         }
     } finally {
-        if (-not $swapped -and (Test-Path -LiteralPath $tmp) -and (Test-Path -LiteralPath (Join-Path $tmp $script:Marker))) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        if (-not $swapped -and (Test-Path -LiteralPath $tmp) -and (Test-Path -LiteralPath (PJ $tmp $script:Marker))) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
-    $binDir = Join-Path $app 'bin'
-    $wrapper = Join-Path $binDir 'notebook-ai.cmd'
+    $binDir = PJ $app 'bin'
+    $wrapper = PJ $binDir 'notebook-ai.cmd'
     Say ''
     Say 'notebook-ai installed.'
     Say ('  application : ' + $app)
@@ -545,9 +562,9 @@ function Invoke-Install($o, [string]$app) {
             Say ('  PATH        : added ' + $binDir + ' to your user PATH. Open a NEW Command Prompt for it to take effect (existing windows keep the old PATH).')
         }
     }
-    if ($addedByUs) { [IO.File]::WriteAllText((Join-Path $app 'path-state.txt'), ('path-entry-added=' + $binDir + "`r`n")) }
+    if ($addedByUs) { [IO.File]::WriteAllText((PJ $app 'path-state.txt'), ('path-entry-added=' + $binDir + "`r`n")) }
     elseif ($already -and $script:PreviousPathAdded -and ((Get-EntryKey $script:PreviousPathAdded) -eq (Get-EntryKey $binDir))) {
-        [IO.File]::WriteAllText((Join-Path $app 'path-state.txt'), ('path-entry-added=' + $binDir + "`r`n"))
+        [IO.File]::WriteAllText((PJ $app 'path-state.txt'), ('path-entry-added=' + $binDir + "`r`n"))
     }
     if (-not $already -and -not $addedByUs) {
         Say ''
@@ -580,7 +597,7 @@ function Invoke-Main([string[]]$argv) {
         'uninstall' { return (Invoke-Uninstall $app) }
         default {
             $script:PreviousPathAdded = $null
-            if (Test-Path -LiteralPath (Join-Path $app $script:Marker)) { $script:PreviousPathAdded = Read-OwnedState $app }
+            if (Test-Path -LiteralPath (PJ $app $script:Marker)) { $script:PreviousPathAdded = Read-OwnedState $app }
             return (Invoke-Install $o $app)
         }
     }
