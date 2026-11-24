@@ -4,6 +4,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # Windows PowerShell 5.1 downloads crawl with the progress bar enabled
 
 $DetSha = '28fe5895c24fd108c19eb3e8479f4ab385fbfc62'
 $RecSha = 'b8f84f0b80c529de40b4fbb3544b84fa7233a513'

@@ -44,6 +44,11 @@ def runTool = { List<String> cmd, File dir = null, Map<String, String> env = [:]
     if (p.exitValue() != 0) { throw new GradleException("command failed (exit ${p.exitValue()}): ${cmd.join(' ')}\n${out}") }
     out
 }
+// Like runTool but never throws: returns the combined output whatever the exit status (WiX tools print help with a non-zero status).
+def runToolLenient = { List<String> cmd ->
+    Process p = new ProcessBuilder(cmd.collect { it.toString() }).redirectErrorStream(true).start()
+    String out = p.inputStream.getText('UTF-8'); p.waitFor(); out
+}
 def which = { String exe ->
     String path = System.getenv('PATH') ?: ''
     for (String d : path.split(File.pathSeparator)) { File f = new File(d, exe); if (f.isFile() && f.canExecute()) { return f } }
@@ -166,6 +171,7 @@ def writeNativeMeta = { String os, Map spec, Map jdk, File legalDir, String extr
     if (jdk.ea) { internalReasons << "early-access runtime (${jdk.runtimeVersion})" }
     if (!pub.configured) { internalReasons << 'publisher/maintainer not configured' }
     if (dirty) { internalReasons << 'source tree had uncommitted changes' }
+    if (project.findProperty('nativeAppVersion')) { internalReasons << "version override ${project.findProperty('nativeAppVersion')} for upgrade testing" }
     Map meta = [
         generator: 'notebook-ai gradle native installer', schemaVersion: 1,
         application: [name: 'notebook-ai', version: project.version.toString(), packageVersion: extraVersion],
@@ -187,11 +193,12 @@ def writeNativeMeta = { String os, Map spec, Map jdk, File legalDir, String extr
 def jpackageCommon = { String os, File base, Map jdk, String type ->
     String exe = onWindows ? '.exe' : ''
     String ver = project.version.toString()
-    if (!(ver ==~ /\d+(\.\d+){0,2}/)) { throw new GradleException("jpackage needs a numeric version (X.Y.Z); project version is '${ver}'") }
+    String nativeVer = (project.findProperty('nativeAppVersion') ?: ver).toString()   // -PnativeAppVersion is for UPGRADE TESTS only (marks the build internal)
+    if (!(nativeVer ==~ /\d+(\.\d+){0,2}/)) { throw new GradleException("jpackage needs a numeric version (X.Y.Z); got '${nativeVer}'") }
     String sep = onWindows ? '\\' : '/'
     def pub = publisher()
     String lic = new File(rootProject.projectDir, 'LICENSE').readLines().find { it.startsWith('Copyright') } ?: ''
-    List<String> c = [new File(jdk.home, 'bin/jpackage' + exe).path, '--type', type, '--name', APP_NAME, '--app-version', ver,
+    List<String> c = [new File(jdk.home, 'bin/jpackage' + exe).path, '--type', type, '--name', APP_NAME, '--app-version', nativeVer,
         '--input', new File(base, 'input').path, '--main-jar', "notebook-ai-${ver}.jar", '--main-class', 'notebookai.ui.Main',
         '--runtime-image', jdk.runtimeDir.path,
         '--app-content', new File(base, 'content/fx').path, '--app-content', new File(base, 'content/models').path, '--app-content', new File(base, 'content/legal').path,
@@ -386,7 +393,7 @@ tasks.register('packageExe') {
         // JDK 21's jpackage supports WiX Toolset 3.x only (WiX 4/5 support arrived in JDK 24).
         File candle = which('candle.exe'); File light = which('light.exe')
         if (candle == null || light == null) { throw new GradleException('WiX Toolset 3.x (candle.exe, light.exe) was not found on PATH. JDK 21 jpackage needs WiX 3.x (3.14.1 recommended); WiX 4/5 are NOT supported by JDK 21. Install it yourself and add its bin directory to PATH.') }
-        String wv = runTool([candle.path, '-?']).readLines().find { it.toLowerCase().contains('version') } ?: ''
+        String wv = runToolLenient([candle.path, '-?']).readLines().find { it.toLowerCase().contains('version') } ?: ''
         if (!(wv =~ /version\s+3\./).find()) { throw new GradleException("WiX 3.x is required for JDK 21 jpackage; found: ${wv}") }
         def spec = [os: 'windows', dir: 'win-dist']
         File root = rootProject.projectDir
@@ -396,14 +403,20 @@ tasks.register('packageExe') {
         def jdk = buildRuntime('windows')
         Map meta = writeNativeMeta('windows', spec, jdk, new File(base, 'content/legal'), project.version.toString())
         // second launcher with a console, so `notebook-ai-cli --self-check` prints output and returns an exit status
-        File cliProps = new File(base, 'work/notebook-ai-cli.properties'); cliProps.text = 'win-console=true\n'
-        List<String> cmd = jpackageCommon('windows', base, jdk, 'exe') + ['--win-per-user-install', '--win-menu', '--win-menu-group', 'Notebook-AI', '--win-shortcut', '--win-shortcut-prompt',
+        File extra = new File(base, 'launchers'); extra.mkdirs()      // NOT inside --temp: jpackage requires an empty temp directory
+        File cliProps = new File(extra, 'notebook-ai-cli.properties'); cliProps.text = 'win-console=true\n'
+        // WiX shows the license page from an RTF file: wrap the plain-text LICENSE (escaping RTF control characters) instead of passing text
+        String lt = new File(base, 'content/legal/LICENSE').getText('UTF-8').replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}').replace('\r\n', '\n').replace('\n', '\\par\n')
+        File rtf = new File(extra, 'LICENSE.rtf'); rtf.text = '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Courier New;}}\\f0\\fs20 ' + lt + '}'
+        List<String> cmd = jpackageCommon('windows', base, jdk, 'exe').collect { it.toString() }
+        int li = cmd.indexOf('--license-file'); cmd[li + 1] = rtf.path
+        cmd = cmd + ['--win-per-user-install', '--win-menu', '--win-menu-group', 'Notebook-AI', '--win-shortcut', '--win-shortcut-prompt',
             '--win-dir-chooser', '--win-upgrade-uuid', WIN_UPGRADE_UUID, '--add-launcher', "notebook-ai-cli=${cliProps.path}"]
         runTool(cmd)
         File raw = new File(base, 'out').listFiles().find { it.name.endsWith('.exe') }
         if (raw == null) { throw new GradleException('jpackage produced no .exe') }
         File finalDir = new File(root, 'release-output'); finalDir.mkdirs()
-        File target = new File(finalDir, "notebook-ai-${project.version}-windows-x64-setup.exe")
+        File target = new File(finalDir, "notebook-ai-${project.findProperty('nativeAppVersion') ?: project.version}-windows-x64-setup.exe")
         if (target.exists()) { target.delete() }
         java.nio.file.Files.move(raw.toPath(), target.toPath())
         maybeSign(target, meta, new File(base, 'content/legal/native-package.json'))
