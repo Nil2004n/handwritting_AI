@@ -1,0 +1,107 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ai.notebookai.proof'
+    compileSdkVersion 'android-37.0'   // the installed platform directory (minor-versioned platforms are addressed by their directory name)
+
+    defaultConfig {
+        applicationId 'ai.notebookai.proof'
+        minSdk 24          // the onnxruntime-android 1.22.0 AAR declares minSdkVersion 24 (read from its AndroidManifest.xml)
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0'
+        ndk {
+            // Intended device ABI: arm64-v8a. x86_64 is for emulators. The AAR also ships armeabi-v7a and x86; they are left out of the proof APK.
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        // Core library desugaring is NOT enabled: the engine's JDK API use stays within Android API 24, proven by verifyEngineAndroidApi below
+        // (android lint's NewApi did NOT flag a deliberate String.isBlank in a negative control, so it is not used as evidence).
+    }
+
+    androidResources {
+        noCompress += ['onnx']   // models are stored uncompressed in the APK
+    }
+
+    sourceSets.main.assets.srcDirs += layout.buildDirectory.dir('generated/proof-assets')
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        warningsAsErrors = false
+    }
+}
+
+dependencies {
+    implementation project(':engine')
+    // The Android native runtime (per-ABI libs, same ai.onnxruntime Java API as the desktop jar). The desktop artifact
+    // com.microsoft.onnxruntime:onnxruntime must NOT be on this classpath; verifyProofDependencies checks that.
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
+}
+
+// Models and the deterministic fixture are copied from the repository into the APK's assets at build time; the build FAILS if the models are
+// missing or do not match checksums.sha256 (they are git-ignored and produced by tools/download-models.sh).
+def repoRoot = rootProject.projectDir.parentFile
+tasks.register('copyProofAssets', Copy) {
+    def out = layout.buildDirectory.dir('generated/proof-assets')
+    into out
+    from(new File(repoRoot, 'models')) {
+        include 'det.onnx', 'det.yml', 'rec.onnx', 'rec.yml', 'checksums.sha256'
+        into 'models'
+    }
+    from(new File(repoRoot, 'src/test/resources/fixtures')) {
+        include 'print-900x500.png', 'print-900x500.expected.txt'
+        into 'fixtures'
+    }
+    doFirst {
+        def models = new File(repoRoot, 'models')
+        def manifest = new File(models, 'checksums.sha256')
+        if (!manifest.isFile()) { throw new GradleException("models/checksums.sha256 not found; run tools/download-models.sh first") }
+        manifest.readLines().findAll { it.trim() && !it.startsWith('#') }.each { line ->
+            def parts = line.trim().split(/\s+/)
+            def f = new File(models, parts[-1])
+            if (!f.isFile()) { throw new GradleException("model file missing: ${f}; run tools/download-models.sh") }
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            f.withInputStream { s -> byte[] b = new byte[65536]; int n; while ((n = s.read(b)) > 0) { md.update(b, 0, n) } }
+            def hex = md.digest().collect { String.format('%02x', it) }.join()
+            if (hex != parts[0].toLowerCase()) { throw new GradleException("model checksum mismatch for ${f.name}") }
+        }
+    }
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'copyProofAssets' }
+
+// Dependency boundary on the RESOLVED debug runtime classpath.
+tasks.register('verifyProofDependencies') {
+    group = 'verification'
+    description = 'Fails if the Android app would contain the desktop ONNX Runtime, JavaFX, or other desktop-only libraries.'
+    doLast {
+        def names = configurations.debugRuntimeClasspath.resolvedConfiguration.resolvedArtifacts*.moduleVersion*.id*.toString() as List
+        def projects = configurations.debugRuntimeClasspath.incoming.resolutionResult.allComponents*.toString()
+        println "debugRuntimeClasspath: ${names + projects}"
+        def bad = names.findAll { it.startsWith('com.microsoft.onnxruntime:onnxruntime:') || it.contains('openjfx') || it.contains('metadata-extractor') || it.contains('xmpcore') }
+        if (bad) { throw new GradleException("desktop-only dependencies reached the Android runtime classpath: ${bad}") }
+        if (!names.contains('com.microsoft.onnxruntime:onnxruntime-android:1.22.0')) { throw new GradleException('onnxruntime-android is missing from the runtime classpath') }
+        println 'android dependencies OK: onnxruntime-android only, no desktop ONNX Runtime / JavaFX'
+    }
+}
+
+// Exact API check: every JDK method/field the engine's compiled classes reference is looked up in the platform's api-versions.xml.
+tasks.register('verifyEngineAndroidApi', Exec) {
+    group = 'verification'
+    description = 'Fails if the engine references any JDK API newer than minSdk (tools/check-android-api.py).'
+    dependsOn ':engine:classes'
+    def sdk = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+    doFirst {
+        if (!sdk) { throw new GradleException('set ANDROID_HOME to the Android SDK') }
+        def platform = new File(sdk, 'platforms').listFiles().findAll { new File(it, 'data/api-versions.xml').isFile() }.sort { it.name }.last()
+        commandLine 'python3', '-I', new File(rootProject.projectDir.parentFile, 'tools/check-android-api.py').path,
+                '--api-versions', new File(platform, 'data/api-versions.xml').path, '--min-sdk', android.defaultConfig.minSdkVersion.apiLevel.toString(),
+                project(':engine').layout.buildDirectory.dir('classes/java/main').get().asFile.path
+    }
+}

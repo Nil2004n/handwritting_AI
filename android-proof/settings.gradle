@@ -1,0 +1,20 @@
+// Android PROOF HARNESS: a separate Gradle build (not part of the desktop build, so desktop builds never need an Android SDK).
+// It includes the portable engine module from ../engine as-is and depends on it like any consumer would.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.PREFER_SETTINGS
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'notebook-ai-android-proof'
+include ':app'
+include ':engine'
+project(':engine').projectDir = file('../engine')

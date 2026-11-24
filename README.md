@@ -511,9 +511,12 @@ has **not been run** on real Windows.
 ## Repository layout
 
 ```
-src/main/java/notebookai/
-  ocr/       OCR pipeline (preprocess, ONNX service, DB postprocess, CTC decode, reading order, CLI, debug)
-  model/     working image, model config, UI control state
+engine/                    PORTABLE OCR engine (Gradle subproject, pure Java 17, no AWT/JavaFX): PixelImage, ModelAssets, OcrEngine, OcrResult
+                           and the pipeline internals. Specification and Android notes: docs/ENGINE.md
+android-proof/             separate Gradle build (needs an Android SDK; NOT part of the desktop build): engine proof harness, not a product UI
+src/main/java/notebookai/  the DESKTOP application (the Gradle root project)
+  ocr/       desktop adapters and tools sharing the package name with the engine: DesktopImageIO, OcrService (facade), debug writers, CLI, diagnostics
+  model/     working image, model config (desktop models-directory precedence), UI control state
   project/   project data, .nbai store, saving/dirty tracking, background tasks, shutdown policy, export, memory guard
   eval/      CER/WER, alignment, evaluate task
   ui/        JavaFX application (Main, NotebookAiApp)
@@ -527,6 +530,12 @@ models/      ONNX models + checksums.sha256 (binaries git-ignored)
 third-party/ upstream PaddleOCR licence
 Makefile · build.gradle · settings.gradle · gradlew
 ```
+
+**Engine / mobile handoff:** the OCR engine is a separate module (`engine/`) with a documented contract, pipeline specification and an
+Android proof harness: see [`docs/ENGINE.md`](docs/ENGINE.md). Android *build* integration is verified; Android *runtime* acceptance is pending
+(no device was available). Commands: `./gradlew :engine:build` (engine tests + dependency check), and
+`ANDROID_HOME=$HOME/Android/Sdk ./gradlew -p android-proof :app:verifyEngineAndroidApi :app:verifyProofDependencies :app:assembleDebug`.
+Packaging tests that must not touch `release-output/` take `-PreleaseOutputDir=/some/temp/dir`.
 
 A guided tour of the design is in [`fde.md`](fde.md). The earlier React-Native/Android implementation is preserved
 under the `archive/android-rn-phase0` tag.
