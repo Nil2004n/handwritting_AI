@@ -45,10 +45,13 @@ java {
 
 // The engine subproject follows the application version.
 project(':engine').version = version
+project(':spelling').version = version
 
 dependencies {
     // The portable OCR engine (engine/): image type, models, pipeline. No desktop dependencies.
     implementation project(':engine')
+    // Offline spelling assistance (word lists + checker); independent of the engine.
+    implementation project(':spelling')
 
     // ONNX Runtime, CPU execution (includes linux-x64 natives). The ENGINE needs only its Java API (compileOnly); this application
     // supplies the desktop native runtime.
@@ -407,6 +410,7 @@ distSpecs.each { String tname, Map spec ->
     }
     dependencies.add(conf.name, 'com.drewnoakes:metadata-extractor:2.19.0')   // pulls xmpcore (pure Java)
     dependencies.add(conf.name, project(':engine'))                          // first-party engine jar (notebookai-engine-<version>.jar)
+    dependencies.add(conf.name, project(':spelling'))                        // first-party spelling jar (notebookai-spelling-<version>.jar; bundles the SCOWL word lists)
 
     def trim = tasks.register("trimOnnxRuntime${tname}", Zip) {
         description = "ONNX Runtime jar reduced to the ${spec.ort} natives (one architecture per distribution)."

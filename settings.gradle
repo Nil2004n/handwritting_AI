@@ -2,3 +2,6 @@ rootProject.name = 'notebook-ai'
 
 // The portable OCR engine (pure Java, no AWT/JavaFX/desktop dependency; see docs/ENGINE.md). The root project IS the desktop application.
 include 'engine'
+
+// Offline English spelling assistance (pure Java, no dependencies; separate from the OCR engine, which never depends on it; see docs/SPELLING.md).
+include 'spelling'

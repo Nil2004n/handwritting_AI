@@ -1,0 +1,53 @@
+// notebook-ai spelling assistance: platform-neutral Java library (desktop JVM and, by design, Android). See docs/SPELLING.md.
+//
+// Same constraints as the OCR engine: pure Java 17 bytecode and library API, no runtime dependencies, nothing desktop-only.
+// It is deliberately separate from the engine: the OCR engine never depends on it (spelling never touches raw OCR results).
+plugins {
+    id 'java-library'
+}
+
+group = 'ai.notebookai'
+if (version == 'unspecified') { version = '0.1.0' }   // the desktop build overrides this with its own version (see root build.gradle)
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17            // --release rejects any JDK API newer than 17
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-XDstringConcat=inline']
+}
+
+jar {
+    // NOT 'notebook-ai-*': install.sh / install-windows.ps1 / jpackage treat 'notebook-ai-*.jar' as THE application jar.
+    archiveBaseName = 'notebookai-spelling'
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.12.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+tasks.register('verifySpellingDependencies') {
+    group = 'verification'
+    description = 'Fails if the spelling module would hand a consumer any runtime dependency.'
+    doLast {
+        def runtime = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts*.moduleVersion*.id*.toString()
+        def compile = configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts*.moduleVersion*.id*.toString()
+        if (runtime || compile) { throw new GradleException("spelling must have no dependencies, but has runtime=${runtime} compile=${compile}") }
+        println 'spelling dependencies OK: none'
+    }
+}
+tasks.named('check') { dependsOn 'verifySpellingDependencies' }

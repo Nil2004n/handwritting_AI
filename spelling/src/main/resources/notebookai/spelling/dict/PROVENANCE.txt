@@ -1,0 +1,38 @@
+PROVENANCE of the bundled English word lists (notebook-ai spelling assistance)
+
+What they are
+  SCOWL (Spell Checker Oriented Word Lists), version 2020.12.07, by Kevin Atkinson, upstream
+  https://github.com/en-wl/wordlist  (project page http://wordlist.sourceforge.net/), in the plain, already-expanded word-list form that
+  Debian builds from the source package "scowl" 2020.12.07-4. They are NOT Microsoft, Office or Windows dictionaries and nothing here is
+  Microsoft-backed or Microsoft-equivalent.
+
+Files (bytes exactly as shipped in the Debian packages; one entry per line, UTF-8, NFC, no duplicates; checked at load time against SHA256SUMS)
+  en-US.txt         american-english         (Debian package wamerican        2020.12.07-4)  full list   (~104k entries)
+  en-US.common.txt  american-english-small   (Debian package wamerican-small  2020.12.07-4)  smaller list of the more common words (~51k)
+  en-GB.txt         british-english          (wbritish        2020.12.07-4)
+  en-GB.common.txt  british-english-small    (wbritish-small  2020.12.07-4)
+  en-CA.txt         canadian-english         (wcanadian       2020.12.07-4)
+  en-CA.common.txt  canadian-english-small   (wcanadian-small 2020.12.07-4)
+  The "common" list is used ONLY as a commonness tier when ranking suggestions. It is not word-frequency data and not a calibrated score.
+  The lists contain proper nouns, possessives ('s forms), contractions and accented words; they are a spelling list, not a vocabulary of "correct" text.
+
+How they were obtained (no installation: apt only downloads and verifies against the signed repository index)
+  apt-get download wamerican wamerican-small wbritish wbritish-small wcanadian wcanadian-small     # Kali rolling (mirrors Debian), 2020.12.07-4
+  .deb SHA-256:
+    3b66a8174e8577767aec4c08b8742a2a7551f3a938da351d9aaef13ff0587f1e  wamerican_2020.12.07-4_all.deb
+    9a91f807cf9bcebed3bab8420872d3835eb11d0db1e4fd00f30e42f3134d8ed9  wamerican-small_2020.12.07-4_all.deb
+    460507558c9cec1ba9c41f074d4eab6a4a0015ec637787545dc4c70ccde2527f  wbritish_2020.12.07-4_all.deb
+    f8a2e9f91996e7bca7192b26e47795bdbbad0be171207abea5dde42e685ec8e6  wbritish-small_2020.12.07-4_all.deb
+    1bd4e9286842d6b89f7631fba56a7c5da1c82854191d80097d603c72a148e15d  wcanadian_2020.12.07-4_all.deb
+    5bc337e7cbc4c6c028bf7604f898c7fcd941df5d8063690305deba766774f533  wcanadian-small_2020.12.07-4_all.deb
+  dpkg-deb -x <package>.deb DIR ; the list is DIR/usr/share/dict/<name> ; the notice is DIR/usr/share/doc/<package>/copyright
+  The six copyright files are byte-identical (SHA-256 1d7c0128f6c72d2270bf...). Re-derive/verify with: sh tools/verify-spelling-dictionaries.sh [DIR-with-the-.deb-files]
+
+License / notice (preserved verbatim, see SCOWL-COPYRIGHT.txt)
+  The SCOWL README notice: Copyright 2000-2011 Kevin Atkinson; permission to use, copy, modify, distribute and sell the word lists and their output for any purpose
+  without fee provided the copyright notice and permission notice appear in all copies and in supporting documentation. The same file reproduces the notices of the
+  parts SCOWL incorporates (public-domain lists, the WordNet 1.6 notice (Princeton University), the Ispell notice (Geoff Kuenning), J Ross Beresford's notice, ...).
+  Redistribution condition for this project: SCOWL-COPYRIGHT.txt must accompany the lists in every distribution (it is bundled next to them in the jar and copied
+  into the distributions' licenses/ directory). No legal review has been performed; see packaging/licensing-status.json (item scowl-wordlists).
+
+Not included: Hunspell/Aspell affix files, the SCOWL database/scripts, any Microsoft or Office dictionary, any user or personal word list.
