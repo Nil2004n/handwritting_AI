@@ -125,7 +125,7 @@ def validateNativeInput = { File base, Map spec ->
     def bad = { String m -> problems << m }
     String cls = spec.os == 'windows' ? 'win' : 'linux'; String nat = spec.os == 'windows' ? 'win-x64' : 'linux-x64'
     List<String> inputJars = new File(base, 'input').list() as List
-    Set<String> expectInput = ["notebook-ai-${project.version}.jar", 'onnxruntime-1.22.0.jar', 'metadata-extractor-2.19.0.jar', 'xmpcore-6.1.11.jar'] as Set
+    Set<String> expectInput = ["notebook-ai-${project.version}.jar".toString(), "notebookai-engine-${project.version}.jar".toString(), 'onnxruntime-1.22.0.jar', 'metadata-extractor-2.19.0.jar', 'xmpcore-6.1.11.jar'] as Set
     if (inputJars as Set != expectInput) { bad("jpackage input must be exactly ${expectInput}, found ${inputJars}") }
     List<String> fx = new File(base, 'content/fx').list() as List
     if (fx.sort() != ['base', 'controls', 'graphics'].collect { "javafx-${it}-21.0.7-${cls}.jar".toString() }.sort()) { bad("JavaFX content must be the three ${cls} jars, found ${fx}") }

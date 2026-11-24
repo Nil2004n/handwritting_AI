@@ -28,7 +28,8 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
-    archiveBaseName = 'notebook-ai-engine'
+    // NOT 'notebook-ai-engine': install.sh / install-windows.ps1 / jpackage treat 'notebook-ai-*.jar' as THE application jar and require exactly one.
+    archiveBaseName = 'notebookai-engine'
 }
 
 dependencies {

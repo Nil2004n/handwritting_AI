@@ -136,7 +136,7 @@ rm -rf "$T/moved away" "$T/ex tract ed"; OUT=$(cd / && env -i HOME="$H" PATH="$R
 echo "== 6. real OCR through the INSTALLED files (trimmed ONNX Runtime, bundled models), cwd=/"
 if [ -f "$ROOT/samples/handwriting-test.jpg" ]; then
     L=$APP/dist/lib
-    OUT=$(cd / && env -i HOME="$H" PATH="$RP" NOTEBOOK_AI_MODELS="$APP/models" java -cp "$L/notebook-ai-0.1.0.jar:$L/onnxruntime-1.22.0.jar:$L/metadata-extractor-2.19.0.jar:$L/xmpcore-6.1.11.jar" notebookai.ocr.RecognizeCli "$ROOT/samples/handwriting-test.jpg" 2>&1); RC=$?
+    OUT=$(cd / && env -i HOME="$H" PATH="$RP" NOTEBOOK_AI_MODELS="$APP/models" java -cp "$L/notebook-ai-0.1.0.jar:$L/notebookai-engine-0.1.0.jar:$L/onnxruntime-1.22.0.jar:$L/metadata-extractor-2.19.0.jar:$L/xmpcore-6.1.11.jar" notebookai.ocr.RecognizeCli "$ROOT/samples/handwriting-test.jpg" 2>&1); RC=$?
     t "RecognizeCli runs on the installed jars" $RC "$OUT"
     tt "OCR produced the known first line" "$OUT" "This is how it's done"; tt "3 regions detected" "$OUT" "Regions: 3"
 else skip "sample image not available"; fi

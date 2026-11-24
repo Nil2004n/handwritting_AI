@@ -406,7 +406,7 @@ distSpecs.each { String tname, Map spec ->
         dependencies.add(conf.name, "org.openjfx:javafx-${m}:21.0.7:${spec.cls}") { transitive = false }
     }
     dependencies.add(conf.name, 'com.drewnoakes:metadata-extractor:2.19.0')   // pulls xmpcore (pure Java)
-    dependencies.add(conf.name, project(':engine'))                          // first-party engine jar (notebook-ai-engine-<version>.jar)
+    dependencies.add(conf.name, project(':engine'))                          // first-party engine jar (notebookai-engine-<version>.jar)
 
     def trim = tasks.register("trimOnnxRuntime${tname}", Zip) {
         description = "ONNX Runtime jar reduced to the ${spec.ort} natives (one architecture per distribution)."
