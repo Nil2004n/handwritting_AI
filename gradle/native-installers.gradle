@@ -347,7 +347,8 @@ tasks.register('verifyDeb') {
         maint.deleteDir()
         if (paths.count { it.contains('/lib/fx/javafx-') && it.endsWith('-linux.jar') } != 3) { bad('expected exactly 3 Linux JavaFX jars') }
         paths.findAll { it =~ /(-win\.jar|\.dll|\.dylib|\.exe|\.nbai|\.zip|\.deb|\.git\/|\/src\/|linux-dist|win-dist|release-output|eval-local|__pycache__)/ }.each { bad("unexpected path in package: ${it}") }
-        if (paths.count { it.startsWith('./opt/notebook-ai/lib/app/') && it.endsWith('.jar') } != 4) { bad('expected exactly 4 application jars in lib/app') }
+        if (paths.count { it.startsWith('./opt/notebook-ai/lib/app/') && it.endsWith('.jar') } != 5) { bad('expected exactly 5 application jars in lib/app (application, engine, ONNX Runtime, metadata-extractor, xmpcore)') }
+        if (!paths.contains("./opt/notebook-ai/lib/app/notebookai-engine-${ver}.jar".toString())) { bad("the engine jar notebookai-engine-${ver}.jar is missing from lib/app") }
         // extract and inspect
         File x = new File(rootProject.projectDir, 'build/native/verify-deb'); if (x.exists()) { x.deleteDir() }; x.mkdirs()
         runTool(['dpkg-deb', '-x', deb.path, x.path]); runTool(['dpkg-deb', '-e', deb.path, new File(x, 'DEBIAN').path])
