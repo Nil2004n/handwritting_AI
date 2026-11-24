@@ -6,7 +6,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $DetSha = '28fe5895c24fd108c19eb3e8479f4ab385fbfc62'
-$RecSha = 'b8f3c850b80c529de40b4fbb3544b84fa7233a513'
+$RecSha = 'b8f84f0b80c529de40b4fbb3544b84fa7233a513'
 $DetPinned = "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/$DetSha"
 $RecPinned = "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/$RecSha"
 $DetBranch = 'https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/main'

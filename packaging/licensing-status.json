@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "evidenceGathered": "2026-11-24",
+  "note": "Hand-maintained. A public release requires every releaseBlocking item to have status 'resolved'. Statuses: resolved | partial | unresolved. Evidence is described honestly; a declaration is not the same as a grant.",
+  "items": [
+    {
+      "id": "onnxruntime-license",
+      "component": "ONNX Runtime", "version": "1.22.0", "declaredLicense": "MIT",
+      "status": "resolved", "releaseBlocking": true,
+      "evidence": "MIT LICENSE text obtained from the official 1.22.0 release artifact (PyPI wheel, sha256 verified against the published digest); the Java jar's ThirdPartyNotices.txt is shipped. The GitHub repository was unreachable, so the tag itself was not used.",
+      "files": ["licenses/onnxruntime/LICENSE", "licenses/onnxruntime-ThirdPartyNotices.txt"]
+    },
+    {
+      "id": "openjfx-license",
+      "component": "OpenJFX / JavaFX", "version": "21.0.7", "declaredLicense": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "status": "resolved", "releaseBlocking": true,
+      "evidence": "LICENSE, ADDITIONAL_LICENSE_INFO, ASSEMBLY_EXCEPTION and the javafx.graphics third-party notices taken from release tags 21.0.7+0 and 21.0.7+1 of openjdk/jfx21u (identical at both). Corresponding-source pointers are in THIRD-PARTY-NOTICES.txt.",
+      "files": ["licenses/openjfx/LICENSE", "licenses/openjfx/ADDITIONAL_LICENSE_INFO", "licenses/openjfx/ASSEMBLY_EXCEPTION", "licenses/openjfx/jpeg_fx.md", "licenses/openjfx/mesa3d.md"]
+    },
+    {
+      "id": "metadata-extractor-license",
+      "component": "metadata-extractor", "version": "2.19.0", "declaredLicense": "Apache-2.0",
+      "status": "resolved", "releaseBlocking": true,
+      "evidence": "Declared in the Maven POM; the canonical Apache-2.0 text is shipped. The artifact has no NOTICE file.",
+      "files": ["licenses/Apache-2.0.txt"]
+    },
+    {
+      "id": "xmpcore-license",
+      "component": "xmpcore (Adobe XMP Core)", "version": "6.1.11", "declaredLicense": "BSD-3-Clause",
+      "status": "unresolved", "releaseBlocking": true,
+      "evidence": "Declared in the Maven POM and jar manifest. No notice file in the jar, no sources jar on Maven Central, Adobe-internal SCM, drewnoakes/xmp-java not found. Adobe's public XMP-Toolkit-SDK (C++, 2020 notice) is a different product and was not substituted.",
+      "attempted": ["Maven Central sources jar (404)", "github.com/drewnoakes/xmp-java (404)", "POM scm url (adobe corp git, not public)", "github.com/adobe/XMP-Toolkit-SDK (different product)"],
+      "releaseImpact": "BSD-3-Clause requires reproducing the copyright notice and conditions for binary redistribution; the exact notice is unavailable."
+    },
+    {
+      "id": "ppocrv6-model-redistribution",
+      "component": "PP-OCRv6_small detector and recognizer (ONNX)", "version": "det 28fe5895c24f / rec b8f84f0b80c5", "declaredLicense": "Apache-2.0",
+      "status": "partial", "releaseBlocking": true,
+      "evidence": "Model cards at the exact commits declare license: apache-2.0; the publishing project PaddleOCR v3.7.0 is released under Apache-2.0 (its LICENSE is identical to third-party/PaddleOCR-LICENSE). The model repositories contain no LICENSE/NOTICE file (the badge links to a nonexistent ./LICENSE) and no statement specific to the weights was found.",
+      "attempted": ["Hub API + file list at the exact commits", "model cards at the exact commits", "PaddleOCR v3.7.0 README + LICENSE"],
+      "releaseImpact": "Redistribution rests on metadata and the project license, not on an explicit grant for the weights. Needs the maintainer's/legal confirmation or an upstream statement before public release."
+    }
+  ]
+}

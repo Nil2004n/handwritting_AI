@@ -1,17 +1,43 @@
-Provenance of the license texts in this directory (fetched/copied once and committed as inputs to the distribution build):
+Provenance of the license texts in this directory (obtained once, committed as inputs to the distribution/installer builds).
+Evidence strength is stated per item; see ../licensing-status.json for the machine-readable status used by the release gate.
 
-- openjfx/LICENSE, openjfx/ADDITIONAL_LICENSE_INFO, openjfx/ASSEMBLY_EXCEPTION, openjfx/jpeg_fx.md, openjfx/mesa3d.md
-    https://github.com/openjdk/jfx21u at commit dd5bd597dc166a8b3807cde608109d0b6dc156be (the OpenJFX 21 maintenance line;
-    the JavaFX 21.0.7 Maven jars do not contain their own license text). Only legal files that apply to the shipped modules
-    (javafx.base, javafx.graphics, javafx.controls) are included. NOTE: this is a branch snapshot, not the 21.0.7 release tag.
-- Apache-2.0.txt
-    The canonical Apache License 2.0 text (Debian common-licenses). Used for metadata-extractor and for the PP-OCRv6 models
-    (the upstream PaddleOCR license is also kept in ../../third-party/PaddleOCR-LICENSE).
+OpenJFX / JavaFX 21.0.7 (openjfx/)
+  Files: LICENSE, ADDITIONAL_LICENSE_INFO, ASSEMBLY_EXCEPTION, jpeg_fx.md, mesa3d.md (the legal files that apply to the shipped modules
+  javafx.base, javafx.graphics, javafx.controls).
+  Source: https://github.com/openjdk/jfx21u at tags 21.0.7+0 and 21.0.7+1 (raw.githubusercontent.com). All five files are byte-identical at
+  both release tags. Which of the two tags produced the Maven Central 21.0.7 jars was not determined; the content does not differ.
+  Correction: an earlier snapshot taken from the branch (commit dd5bd597...) differed in jpeg_fx.md; the files here are the release-tag versions.
+  SHA-256: LICENSE 4b9abebc4338048a..., ADDITIONAL_LICENSE_INFO a69bce275ba7a357..., ASSEMBLY_EXCEPTION a44eb7b5caf5534c...,
+           jpeg_fx.md a7bb58d9ed7f1184..., mesa3d.md 63f4e6f75caebbcc... (prefixes; full values: sha256sum the files).
 
-KNOWN GAPS (reported, not papered over):
-- ONNX Runtime 1.22.0: declared MIT (Maven POM; per-file headers "Licensed under the MIT License"). Its own LICENSE file could not
-  be obtained (the Maven jars do not contain it and the upstream raw URLs returned 404 from this environment). The jar's own
-  ThirdPartyNotices.txt (third-party components) IS shipped.
-- xmpcore 6.1.11 (transitive dependency of metadata-extractor): declared BSD-3-Clause (Maven POM). No notice file is contained in
-  its jar and none was found upstream; the copyright notice text is therefore missing.
-These gaps are written into THIRD-PARTY-NOTICES.txt and distribution.json ("licensingGaps"). Resolve them before shipping.
+ONNX Runtime 1.22.0 (onnxruntime/LICENSE)
+  Source: the official PyPI release artifact onnxruntime-1.22.0-cp310-cp310-win_amd64.whl (file onnxruntime/LICENSE inside the wheel),
+  sha256 20bca6495d06925631e201f2b257cc37086752e8fe7b6c83a67c6509f4759bc9 (matches the digest published by PyPI for that file).
+  The upstream GitHub repository (microsoft/onnxruntime) was not reachable from the packaging environment, so the GitHub tag could not be
+  used. The license of the Java artifact is declared MIT in its Maven POM; the text is the single project license of that release.
+  The ONNX Runtime Java jar's own ThirdPartyNotices.txt is shipped separately (extracted from the jar by the build).
+
+Apache-2.0.txt
+  The canonical Apache License 2.0 text (Debian common-licenses). Used for metadata-extractor 2.19.0 (declared Apache-2.0 in its POM).
+
+PP-OCRv6_small models (models/ and ../../third-party/PaddleOCR-LICENSE)
+  models/PP-OCRv6_small_det_onnx.README.md and models/PP-OCRv6_small_rec_onnx.README.md: the Hugging Face model cards at the exact commits
+  shipped (det 28fe5895c24fd108c19eb3e8479f4ab385fbfc62, rec b8f84f0b80c529de40b4fbb3544b84fa7233a513). Both state "license: apache-2.0" in
+  their front matter and show an Apache-2.0 badge linking to ./LICENSE, which does NOT exist in those repositories (their files are only
+  README.md, inference.json, inference.onnx, inference.yml). The shipped model files were matched to these commits through the Hub's LFS
+  SHA-256 metadata.
+  ../../third-party/PaddleOCR-LICENSE is byte-identical to LICENSE of PaddlePaddle/PaddleOCR tag v3.7.0 (commit b03f46425e8f...), whose
+  README states "This project is released under the Apache 2.0 license". PP-OCRv6 was released with PaddleOCR 3.7.0.
+  EVIDENCE STRENGTH: declared by model-card metadata and by the publishing project. No separate LICENSE/NOTICE file exists in the model
+  repositories and no statement specific to the weights was found. This is NOT treated as closed (status "partial").
+
+NOT OBTAINED
+  xmpcore 6.1.11 (Adobe XMP Core, transitive dependency of metadata-extractor): declared BSD-3-Clause (Maven POM; jar manifest
+  Bundle-License https://opensource.org/licenses/BSD-3-Clause; vendor Adobe Systems Incorporated). The jar contains no notice file; the POM's
+  source repository is Adobe-internal (git.corp.adobe.com); no sources jar exists on Maven Central; github.com/drewnoakes/xmp-java does not
+  exist. Adobe's public XMP-Toolkit-SDK repository carries a 2020 BSD notice for the C++ toolkit, a different product, which is NOT substituted
+  here. The copyright notice of this component therefore remains missing.
+
+Java runtime (native installers only)
+  Its license files come from the runtime image itself (the JDK's legal/ directory is copied by jlink) plus any vendor notice found next to the
+  JDK; the build records the runtime identity and refuses release builds from early-access runtimes.

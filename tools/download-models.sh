@@ -5,7 +5,7 @@
 set -eu
 
 DET_SHA=28fe5895c24fd108c19eb3e8479f4ab385fbfc62
-REC_SHA=b8f3c850b80c529de40b4fbb3544b84fa7233a513
+REC_SHA=b8f84f0b80c529de40b4fbb3544b84fa7233a513
 DET_PINNED="https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/$DET_SHA"
 REC_PINNED="https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/$REC_SHA"
 DET_BRANCH="https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/main"

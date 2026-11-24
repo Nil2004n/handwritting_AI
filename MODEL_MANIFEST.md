@@ -98,3 +98,8 @@ Checked boundary by boundary against `operators.py`, `rec_img_aug.py`,
   others are confident (o->a 0.990). This audit compared code to upstream by reading; it did not
   numerically cross-check against a reference cv2/onnxruntime stack (not installed). No
   production change made (see HANDOFF Phase 3 / 3b).
+
+## Correction (2026-11-24): recognizer revision pin
+`tools/download-models.sh` and `tools/download-models.ps1` carried a recognizer revision of 41 characters (`b8f3c850b80c...`), which is not a valid Git commit, so the pinned URL always 404'd and the script silently fell back
+to the `main` branch (the byte identity was always protected by `checksums.sha256`). The correct commit is `b8f84f0b80c529de40b4fbb3544b84fa7233a513` (it matches the abbreviation above); the Hub's LFS metadata shows its `inference.onnx`
+is exactly the verified `rec.onnx` (sha256 `5435fd74...`), and the pinned URL now resolves. Likewise the detector commit `28fe5895c24fd108c19eb3e8479f4ab385fbfc62` was confirmed to contain the verified `det.onnx`.
