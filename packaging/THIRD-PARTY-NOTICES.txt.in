@@ -34,6 +34,13 @@ COMPONENTS
    The model files are unmodified; their SHA-256 values are in app/models/checksums.sha256 and distribution.json.
    NOTE: the model repositories declare the license through model-card metadata only (no LICENSE file is present in them); see the license status below.
 
+6. SCOWL word lists 2020.12.07 (Kevin Atkinson et al.), bundled unmodified inside lib/notebookai-spelling-@VERSION@.jar (spelling assistance:
+   US, UK and Canadian English plain word lists). Taken from the Debian packages wamerican, wbritish, wcanadian (and their -small variants), version 2020.12.07-4.
+   License: the SCOWL permission notice (MIT-like) together with the notices of the sources it incorporates (public domain lists, WordNet 1.6 / Princeton University,
+   Ispell / Geoff Kuenning, J Ross Beresford, ...), reproduced verbatim in licenses/scowl/SCOWL-COPYRIGHT.txt. Provenance, package checksums and the file list:
+   licenses/scowl/PROVENANCE.txt. These are NOT Microsoft, Office or Windows dictionaries.
+   Personal dictionaries created by users are stored in the user's own profile and are never part of this distribution.
+
 KNOWN GAPS AND LICENSE STATUS (machine-readable: licensing-status.json)
 -------------------------------------------------------------------------
 @LICENSE_STATUS@

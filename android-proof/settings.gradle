@@ -18,3 +18,6 @@ rootProject.name = 'notebook-ai-android-proof'
 include ':app'
 include ':engine'
 project(':engine').projectDir = file('../engine')
+// Included only so its classes can be API-checked against Android (the proof app itself does not use spelling).
+include ':spelling'
+project(':spelling').projectDir = file('../spelling')

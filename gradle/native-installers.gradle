@@ -125,7 +125,7 @@ def validateNativeInput = { File base, Map spec ->
     def bad = { String m -> problems << m }
     String cls = spec.os == 'windows' ? 'win' : 'linux'; String nat = spec.os == 'windows' ? 'win-x64' : 'linux-x64'
     List<String> inputJars = new File(base, 'input').list() as List
-    Set<String> expectInput = ["notebook-ai-${project.version}.jar".toString(), "notebookai-engine-${project.version}.jar".toString(), 'onnxruntime-1.22.0.jar', 'metadata-extractor-2.19.0.jar', 'xmpcore-6.1.11.jar'] as Set
+    Set<String> expectInput = ["notebook-ai-${project.version}.jar".toString(), "notebookai-engine-${project.version}.jar".toString(), "notebookai-spelling-${project.version}.jar".toString(), 'onnxruntime-1.22.0.jar', 'metadata-extractor-2.19.0.jar', 'xmpcore-6.1.11.jar'] as Set
     if (inputJars as Set != expectInput) { bad("jpackage input must be exactly ${expectInput}, found ${inputJars}") }
     List<String> fx = new File(base, 'content/fx').list() as List
     if (fx.sort() != ['base', 'controls', 'graphics'].collect { "javafx-${it}-21.0.7-${cls}.jar".toString() }.sort()) { bad("JavaFX content must be the three ${cls} jars, found ${fx}") }
@@ -137,7 +137,7 @@ def validateNativeInput = { File base, Map spec ->
     }
     Map want = parseChecksumsN(new File(base, 'content/models/checksums.sha256'))
     MODEL_FILES_N.each { m -> File f = new File(base, 'content/models/' + m); if (!f.isFile() || sha(f) != want[m]) { bad("model ${m} missing or checksum mismatch") } }
-    ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/licensing-status.json', 'licenses/onnxruntime/LICENSE', 'licenses/openjfx/LICENSE'].each { r -> if (!new File(base, 'content/legal/' + r).isFile()) { bad("legal document missing: ${r}") } }
+    ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/licensing-status.json', 'licenses/onnxruntime/LICENSE', 'licenses/openjfx/LICENSE', 'licenses/scowl/SCOWL-COPYRIGHT.txt'].each { r -> if (!new File(base, 'content/legal/' + r).isFile()) { bad("legal document missing: ${r}") } }
     relList(new File(base, 'input')).each { if (!it.endsWith('.jar')) { bad("non-jar in jpackage input: ${it}") } }
     (relList(new File(base, 'input')) + relList(new File(base, 'content'))).each { f ->
         if (f =~ /(-linux\.jar|-win\.jar)$/ && !(f =~ /-${cls}\.jar$/)) { bad("other-platform jar: ${f}") }
@@ -347,8 +347,10 @@ tasks.register('verifyDeb') {
         maint.deleteDir()
         if (paths.count { it.contains('/lib/fx/javafx-') && it.endsWith('-linux.jar') } != 3) { bad('expected exactly 3 Linux JavaFX jars') }
         paths.findAll { it =~ /(-win\.jar|\.dll|\.dylib|\.exe|\.nbai|\.zip|\.deb|\.git\/|\/src\/|linux-dist|win-dist|release-output|eval-local|__pycache__)/ }.each { bad("unexpected path in package: ${it}") }
-        if (paths.count { it.startsWith('./opt/notebook-ai/lib/app/') && it.endsWith('.jar') } != 5) { bad('expected exactly 5 application jars in lib/app (application, engine, ONNX Runtime, metadata-extractor, xmpcore)') }
+        if (paths.count { it.startsWith('./opt/notebook-ai/lib/app/') && it.endsWith('.jar') } != 6) { bad('expected exactly 6 application jars in lib/app (application, engine, spelling, ONNX Runtime, metadata-extractor, xmpcore)') }
         if (!paths.contains("./opt/notebook-ai/lib/app/notebookai-engine-${ver}.jar".toString())) { bad("the engine jar notebookai-engine-${ver}.jar is missing from lib/app") }
+        if (!paths.contains("./opt/notebook-ai/lib/app/notebookai-spelling-${ver}.jar".toString())) { bad("the spelling jar notebookai-spelling-${ver}.jar is missing from lib/app") }
+        if (!paths.contains('./opt/notebook-ai/lib/legal/licenses/scowl/SCOWL-COPYRIGHT.txt')) { bad('the SCOWL notice that must accompany the bundled word lists is missing from lib/legal/licenses/scowl/') }
         // extract and inspect
         File x = new File(rootProject.projectDir, 'build/native/verify-deb'); if (x.exists()) { x.deleteDir() }; x.mkdirs()
         runTool(['dpkg-deb', '-x', deb.path, x.path]); runTool(['dpkg-deb', '-e', deb.path, new File(x, 'DEBIAN').path])

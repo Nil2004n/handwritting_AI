@@ -348,7 +348,7 @@ def validateDist = { File dir, Map spec ->
     boolean win = spec.os == 'windows'
     List<String> required = ['distribution.json', 'SHA256SUMS', 'README.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'app/PLATFORM',
         'app/lib/notebook-ai-' + project.version + '.jar', 'app/models/checksums.sha256', 'licenses/Apache-2.0.txt', 'licenses/PROVENANCE.txt',
-        'licenses/openjfx/LICENSE', 'licenses/onnxruntime-ThirdPartyNotices.txt', 'licenses/onnxruntime/LICENSE', 'licenses/licensing-status.json', 'licenses/PaddleOCR-LICENSE'] +
+        'licenses/openjfx/LICENSE', 'licenses/scowl/SCOWL-COPYRIGHT.txt', 'licenses/scowl/PROVENANCE.txt', 'licenses/onnxruntime-ThirdPartyNotices.txt', 'licenses/onnxruntime/LICENSE', 'licenses/licensing-status.json', 'licenses/PaddleOCR-LICENSE'] +
         MODEL_FILES.collect { 'app/models/' + it } +
         (win ? ['install.cmd', 'uninstall.cmd', 'run-notebook-ai.cmd', 'app/bin/notebook-ai.bat', 'scripts/install-windows.ps1', 'scripts/launcher-body.cmd']
              : ['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai', 'scripts/launcher-body.sh'])
@@ -504,6 +504,9 @@ distSpecs.each { String tname, Map spec ->
             new File(lic, 'onnxruntime/LICENSE').bytes = new File(pk, 'legal/onnxruntime/LICENSE').bytes
             new File(lic, 'models').mkdirs()
             new File(pk, 'legal/models').listFiles().findAll { it.isFile() }.each { new File(lic, 'models/' + it.name).bytes = it.bytes }
+            new File(lic, 'scowl').mkdirs()   // word lists bundled in notebookai-spelling-<ver>.jar: the SCOWL notice must accompany them
+            File spellDict = new File(root, 'spelling/src/main/resources/notebookai/spelling/dict')
+            ['SCOWL-COPYRIGHT.txt', 'PROVENANCE.txt', 'SHA256SUMS'].each { n -> new File(lic, 'scowl/' + n).bytes = new File(spellDict, n).bytes }
             new File(lic, 'openjfx').mkdirs()
             new File(pk, 'legal/openjfx').listFiles().findAll { it.isFile() }.each { new File(lic, 'openjfx/' + it.name).bytes = it.bytes }
             def zf = new java.util.zip.ZipFile(trimmedOrt)

@@ -40,6 +40,8 @@ android {
 
 dependencies {
     implementation project(':engine')
+    // Not used by the proof app itself: included so D8/the APK build also prove the spelling module (pure Java, bundled SCOWL word lists) builds for Android.
+    implementation project(':spelling')
     // The Android native runtime (per-ABI libs, same ai.onnxruntime Java API as the desktop jar). The desktop artifact
     // com.microsoft.onnxruntime:onnxruntime must NOT be on this classpath; verifyProofDependencies checks that.
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
@@ -94,14 +96,15 @@ tasks.register('verifyProofDependencies') {
 // Exact API check: every JDK method/field the engine's compiled classes reference is looked up in the platform's api-versions.xml.
 tasks.register('verifyEngineAndroidApi', Exec) {
     group = 'verification'
-    description = 'Fails if the engine references any JDK API newer than minSdk (tools/check-android-api.py).'
-    dependsOn ':engine:classes'
+    description = 'Fails if the engine or the spelling module references any JDK API newer than minSdk (tools/check-android-api.py).'
+    dependsOn ':engine:classes', ':spelling:classes'
     def sdk = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
     doFirst {
         if (!sdk) { throw new GradleException('set ANDROID_HOME to the Android SDK') }
         def platform = new File(sdk, 'platforms').listFiles().findAll { new File(it, 'data/api-versions.xml').isFile() }.sort { it.name }.last()
         commandLine 'python3', '-I', new File(rootProject.projectDir.parentFile, 'tools/check-android-api.py').path,
                 '--api-versions', new File(platform, 'data/api-versions.xml').path, '--min-sdk', android.defaultConfig.minSdkVersion.apiLevel.toString(),
-                project(':engine').layout.buildDirectory.dir('classes/java/main').get().asFile.path
+                project(':engine').layout.buildDirectory.dir('classes/java/main').get().asFile.path,
+                project(':spelling').layout.buildDirectory.dir('classes/java/main').get().asFile.path
     }
 }

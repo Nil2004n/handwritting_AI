@@ -39,6 +39,16 @@
       "evidence": "Model cards at the exact commits declare license: apache-2.0; the publishing project PaddleOCR v3.7.0 is released under Apache-2.0 (its LICENSE is identical to third-party/PaddleOCR-LICENSE). The model repositories contain no LICENSE/NOTICE file (the badge links to a nonexistent ./LICENSE) and no statement specific to the weights was found.",
       "attempted": ["Hub API + file list at the exact commits", "model cards at the exact commits", "PaddleOCR v3.7.0 README + LICENSE"],
       "releaseImpact": "Redistribution rests on metadata and the project license, not on an explicit grant for the weights. Needs the maintainer's/legal confirmation or an upstream statement before public release."
+    },
+    {
+      "id": "scowl-wordlists",
+      "component": "SCOWL word lists (US, UK and Canadian English)",
+      "version": "2020.12.07 (Debian packages 2020.12.07-4)",
+      "declaredLicense": "SCOWL permission notice (MIT-like) plus the notices of its source lists",
+      "status": "resolved",
+      "releaseBlocking": true,
+      "evidence": "The complete copyright file of the Debian packages (byte-identical across wamerican, wbritish, wcanadian and the -small variants, SHA-256 1d7c0128f6c72d22...) is bundled verbatim; it reproduces the SCOWL notice and the sub-notices (public domain lists, WordNet 1.6 / Princeton University, Ispell / Geoff Kuenning, J Ross Beresford). The lists are shipped unmodified, byte-identical to the Debian packages, with PROVENANCE.txt and SHA256SUMS. The conditions require the notices to accompany copies, which the distribution does. No legal review has been performed.",
+      "files": ["licenses/scowl/SCOWL-COPYRIGHT.txt", "licenses/scowl/PROVENANCE.txt", "licenses/scowl/SHA256SUMS"]
     }
   ]
 }

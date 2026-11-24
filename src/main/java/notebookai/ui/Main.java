@@ -26,8 +26,8 @@ public final class Main {
 
     /**
      * Headless installation check ({@code notebook-ai --self-check}): the Java runtime, the JavaFX modules on the
-     * module path, the ONNX Runtime natives and the OCR models (checksums enforced) - everything a launch needs,
-     * without opening a window. Used by the distribution tests; exit status 0 = ready, 1 = problem.
+     * module path, the ONNX Runtime natives and the OCR models (checksums enforced) - everything a launch needs
+     * (plus the bundled spelling dictionaries), without opening a window. Used by the distribution tests; exit status 0 = ready, 1 = problem.
      */
     private static int selfCheck() {
         boolean ok = true;
@@ -44,6 +44,19 @@ public final class Main {
             System.out.print(OcrSetup.verify(Paths.get("").toAbsolutePath()));
         } catch (OcrException e) {
             System.err.println("OCR setup FAILED: " + e.getMessage());
+            ok = false;
+        }
+        // Spelling assistance resources (bundled word lists inside the spelling jar): found regardless of the working directory.
+        try (notebookai.spelling.WordListBackend spelling = notebookai.spelling.WordListBackend.bundled()) {
+            for (notebookai.spelling.SpellLanguage l : notebookai.spelling.SpellLanguage.values()) {
+                int issues = spelling.check("The quick brown fox jumps over the lazy dog.", l, notebookai.spelling.WordFilter.NONE).issues().size();
+                if (issues != 0) {
+                    throw new notebookai.spelling.SpellException("a sentence of common words was flagged (" + issues + " issue(s))");
+                }
+                System.out.println("Spelling " + l.tag() + ": " + spelling.identity(l));
+            }
+        } catch (notebookai.spelling.SpellException e) {
+            System.err.println("Spelling dictionaries FAILED: " + e.getMessage());
             ok = false;
         }
         System.out.println(ok ? "SELF-CHECK OK" : "SELF-CHECK FAILED");
