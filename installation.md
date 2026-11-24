@@ -67,7 +67,7 @@ Maintainer details: generated into `linux-dist/` / `win-dist/` by `make dist-lin
 For end users who should not have to install Java: `notebook-ai_<ver>_amd64.deb` (Debian/Ubuntu-family x86-64) and `notebook-ai-<ver>-windows-x64-setup.exe` (Windows x64), built by jpackage with a bundled runtime.
 Linux: `sudo apt install ./notebook-ai_<ver>_amd64.deb`, then `notebook-ai` (also in the application menu); upgrade by installing the newer file; `sudo apt remove notebook-ai` (or `purge`). Your projects and `~/.local` are never touched;
 if `/usr/local/bin/notebook-ai` or `~/.local/bin/notebook-ai` could shadow the new command, the install prints a notice. Windows: run the `.exe` (per-user, no Administrator); remove it under Settings > Apps.
-No Java is read from `PATH`/`JAVA_HOME`. Both are **unsigned** (SmartScreen/UAC prompts are expected on Windows) and currently **internal builds** (open license evidence, see the README). The Windows installer has not been tested on Windows.
+No Java is read from `PATH`/`JAVA_HOME`. Both are **unsigned** (an unknown-publisher warning may appear on Windows; the installer is per-user and not expected to need Administrator rights - not yet confirmed on Windows). The console command is `"%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe"`; there is no PATH integration, so `notebook-ai` does not work in CMD unless you add that folder to your PATH and currently **internal builds** (open license evidence, see the README). The Windows installer has not been tested on Windows.
 Build commands and prerequisites (WiX 3.x for JDK 21!) are in `README.md`, "Native installers". The ZIP distributions and the scripts described below still need a separately installed Java 21+.
 
 ## 1. Concepts

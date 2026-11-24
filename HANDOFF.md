@@ -925,3 +925,32 @@ Ubuntu or any non-trixie release, lintian, GUI inside the container, a signed pa
 
 ### Shipping blockers
 xmpcore notice (unresolved) and model redistribution (partial); GA runtime (Temurin) not used locally; publisher/maintainer unconfigured; no signing; no app icon; Windows EXE unbuilt/untested.
+
+## Windows native-installer verification via GitHub Actions: preparation (2026-11-24)
+State verified before preparation: `main` 02954b6, `origin/main` abfc7ff, 14 commits ahead, 0 behind, clean tree; the repository is public; `origin` has no workflows yet. Nothing pushed, no run started.
+
+### Audit of the 14 commits to be pushed
+No binaries, models, archives or installers tracked (only the pre-existing sample JPEG is large); no credentials, tokens or private paths in added lines; the commit identity is the configured git user. Licensing disclosures are present in README, notices, `licensing-status.json` and `native-package.json`; `verifyReleaseLicensing` was not weakened and still fails.
+
+### Defects found in review and fixed before any CI run
+1. jpackage requires an **empty** `--temp` directory; the Windows add-launcher properties file was written into it.
+2. WiX license pages need **RTF**; the plain-text LICENSE is now wrapped into RTF (escaped) for the Windows installer.
+3. `candle.exe -?` can exit non-zero; the WiX version check no longer treats that as failure.
+4. `download-models.ps1` lacked `$ProgressPreference = 'SilentlyContinue'` (very slow on Windows PowerShell 5.1).
+5. Workflows: floating action tags (now pinned to commit SHAs), an automatic `push` trigger on `installers.yml` (removed; dispatch/PR only), and PowerShell's `Stop` preference breaking `2>&1` native output (set to `Continue` where results are asserted explicitly).
+6. Added `-PnativeAppVersion` (test-only; marks the build internal) so CI can build a higher-version installer for a genuine upgrade test.
+
+### Toolchain decisions (verified, not assumed)
+- **JDK:** the old pin `21.0.7+6` was nine quarterly updates behind. Adoptium's API lists Temurin 21.0.13+9 (2026-10-22) as the latest regular GA (21.0.13.1+2, 2026-11-18, is an out-of-band follow-up and was not chosen). `actions/setup-java` resolves versions by matching the full Adoptium list, so the job additionally FAILS unless `java -version` reports Temurin 21.0.13, `jmods` exists and `jpackage.exe` exists.
+- **WiX:** 3.14.1 from the official `wixtoolset/wix3` release asset `wix314.exe` (32,438,176 bytes). The release publishes no digest; SHA-256 `6bf6d03d6923d9ef827ae1d943b90b42b8ebb1b0f68ef6d55f868fa34c738a29` was computed from the download and is verified in the job (trust-on-first-use, disclosed). JDK 21 jpackage supports WiX 3.x only.
+- **Actions** (pinned SHAs): checkout v4.4.0, setup-java v4.9.1, upload-artifact v4.6.2.
+
+### Workflow behavior
+`native-installers.yml` is `workflow_dispatch` only (inputs: `target` = windows|deb|both, default windows; optional `expected_sha`). It verifies the checked-out commit equals `github.sha` (and `expected_sha`), builds a test-only 0.1.1 installer (upgrade test; never uploaded) and the 0.1.0 EXE, runs `tools/test-installer-windows.ps1`, runs `verifyReleaseLicensing` informationally (expected to fail), and uploads `notebook-ai-windows-INTERNAL-unsigned-not-release-approved` (EXE, sidecar, `native-package.json`, identity, WiX/JDK identity, test report, notice) with 2-day retention; failure logs go to `windows-failure-logs`. No release, tag or package is created; the token is read-only; no secrets.
+Artifacts of a public repository can be downloaded by any signed-in GitHub user while they exist; the EXE is an internal build with unresolved license evidence, hence the short retention and explicit labelling.
+
+### Remaining blockers, by category
+A. Redistribution evidence: xmpcore notice (unresolved); model-weights grant (partial).
+B. Build/release configuration: real publisher name and maintainer email; a GA runtime validated in a release build (CI uses Temurin 21.0.13+9; the local Linux build used an EA runtime); platform coverage (Windows EXE not yet built; Debian trixie/Kali-style names only).
+C. Trust and presentation: signing (nothing signed); application icon (jpackage default); package linting (`lintian` not run).
+Functional verification still open: everything Windows (no EXE has been built or run).

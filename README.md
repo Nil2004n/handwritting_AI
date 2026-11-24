@@ -367,7 +367,7 @@ jpackage-built installers that **include their own Java runtime**, so end users 
 path (`lib/fx`, never the classpath), the four application jars on the classpath, the models in `lib/models`. The launcher passes `-Dnotebookai.models=$APPDIR/../models` (a native launcher cannot set environment variables);
 an explicit `NOTEBOOK_AI_MODELS` still wins. The package never uses `java` from `PATH` or `JAVA_HOME`. The runtime source is never downloaded by this build: it is the JDK named by `-PpackagingJdkHome`, `NBAI_PACKAGING_JDK`,
 `JAVA_HOME` (if it has `jmods`) or the Gradle toolchain, recorded in `lib/legal/native-package.json`. **A build from an early-access runtime (this development machine's Debian JDK is `21.0.11-ea`) is flagged an internal build.**
-CI pins Temurin `21.0.7+6`.
+CI (`native-installers.yml`, manual dispatch only) pins Temurin `21.0.13+9` (verified at run time) and WiX 3.14.1 (installer SHA-256 pinned).
 
 **Publisher fields** are configuration, not invented: `-PpublisherName="..." -PdebMaintainerEmail=...`. Unset values become clearly marked placeholders (`unconfigured@invalid`) and mark the build internal.
 There is no application icon in the repository, so jpackage's default icon is used.
@@ -375,7 +375,7 @@ There is no application icon in the repository, so jpackage's default icon is us
 **Debian details.** Maintainer scripts are jpackage's (`xdg-desktop-menu install/uninstall`, made non-fatal) plus a read-only notice if `/usr/local/bin/notebook-ai` or `~/.local/bin/notebook-ai` could shadow `/usr/bin/notebook-ai`.
 They do not touch shell startup files, download, build or launch anything. Dependencies are computed on the build host (Debian/Kali "t64" library names), so build the `.deb` on the distribution family you target; direct JavaFX/GTK needs are added explicitly.
 
-**Signing: nothing is signed.** The `.exe` will trigger Windows SmartScreen/UAC "unknown publisher" prompts until signed; the `.deb` is not signed (apt verifies repository metadata, not a local file). Optional external signing: `-PsignCommand="signtool sign ... {file}"`
+**Signing: nothing is signed.** An unsigned `.exe` may show an unknown-publisher warning; what Windows actually shows has not been observed (a CI runner cannot show SmartScreen), and the installer is per-user, so it is not expected to need Administrator rights (to be confirmed by the Windows test); the `.deb` is not signed (apt verifies repository metadata, not a local file). Optional external signing: `-PsignCommand="signtool sign ... {file}"`
 (credentials come from your environment, never from the repository); `native-package.json` records `signed: false` unless that step succeeds.
 
 **License gate.** `packaging/licensing-status.json` is the machine-readable evidence file (shipped inside every package). `./gradlew verifyReleaseLicensing` **fails while any release-blocking item is not `resolved`**, and every native package built meanwhile
@@ -386,7 +386,7 @@ is marked `internalBuild` with the reasons. Currently resolved: ONNX Runtime LIC
 that maps the *bundled* `libjvm.so`); a real-`dpkg` lifecycle in a private non-root tree; and a real **apt** install/upgrade/remove/purge in a throw-away **Debian trixie** container (dependencies resolved by apt, no Java on the machine). **Not verified:** Ubuntu or any other Debian-family release,
 `lintian` (not installed), a GUI inside the container, and **everything about the Windows installer** - the `.exe` has never been built or run (no Windows machine); `checkNativeInputWindows` validates only the jpackage *input*.
 `tools/test-installer-windows.ps1` and the `native-installers` workflow exist for a real Windows runner and have not been run. Silent-install switches of jpackage's EXE and the `add-launcher` option inheritance are assumptions to confirm on first run.
-Windows PATH integration is **not offered** (it would need custom WiX work): add `%LOCALAPPDATA%\notebook-ai` to your user PATH yourself if you want `notebook-ai-cli` in CMD.
+Windows PATH integration is **not offered** (it would need custom WiX work), so `notebook-ai` does **not** work globally in CMD. The console executable is `%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe` (e.g. `"%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe" --self-check`); add its folder to your user PATH yourself if you want a short name.
 Neither package is ready to ship.
 
 ---
