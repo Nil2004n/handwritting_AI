@@ -306,6 +306,12 @@ out=$(make -n build OS=Windows_NT 2>&1); tt "[static] Windows build dispatches t
 out=$(make -n install OS=Windows_NT APP_DIR='C:\x y' ADD_TO_PATH=1 2>&1); tt "[static] Windows install dispatches to install.cmd" "$out" "install.cmd --app-dir"; tt "[static] ADD_TO_PATH becomes --add-to-path" "$out" "--add-to-path"
 
 echo "== 16. static source checks"
+# A FRESH checkout must have a clean status: .gitattributes line-ending rules that disagree with the committed blobs make every
+# fresh clone (and every CI checkout) report modified files and mark built packages "dirty" (found by the first CI run).
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    rm -rf "$T/fresh-clone"; git clone -q "$ROOT" "$T/fresh-clone" 2>/dev/null
+    st=$(git -C "$T/fresh-clone" status --porcelain 2>/dev/null); [ -z "$st" ]; t "a fresh clone of the committed HEAD has a clean status (line-ending rules agree with the blobs)" $? "$st"
+else skip "git not available for the fresh-clone check"; fi
 if grep -nE '(^|[^a-z_])eval[ (]' "$ROOT/install.sh" "$ROOT/tools/install-windows.ps1" >/dev/null 2>&1; then bad "no eval in the installers"; else ok "no eval in the installers"; fi
 if grep -nE 'Invoke-Expression|iex ' "$ROOT/tools/install-windows.ps1" >/dev/null 2>&1; then bad "no Invoke-Expression in the Windows helper"; else ok "no Invoke-Expression in the Windows helper"; fi
 if grep -nE 'chmod 777|chown -R|setx |\[Environment\]::SetEnvironmentVariable' "$ROOT/install.sh" "$ROOT/tools/install-windows.ps1" "$ROOT/Makefile" >/dev/null 2>&1; then bad "no chmod 777 / chown -R / setx / SetEnvironmentVariable"; else ok "no chmod 777 / chown -R / setx / SetEnvironmentVariable"; fi
