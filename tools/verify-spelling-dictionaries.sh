@@ -7,6 +7,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 R="$ROOT/spelling/src/main/resources/notebookai/spelling/dict"
 FAIL=0
 if ( cd "$R" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ); then echo "PASS  resources match SHA256SUMS"; else echo "FAIL  resources differ from SHA256SUMS"; FAIL=1; fi
+# the resources must be byte-exact on every checkout (a CRLF conversion on Windows broke the checksum check once)
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    bad=0
+    for f in "$R"/*; do
+        a=$(git -C "$ROOT" check-attr text -- "${f#$ROOT/}" | sed 's/.*: text: //')
+        [ "$a" = unset ] || { bad=1; echo "FAIL  git would convert line endings of ${f#$ROOT/} (text: $a); .gitattributes must say -text"; }
+    done
+    [ "$bad" = 0 ] && echo "PASS  .gitattributes keeps the dictionary resources byte-exact (-text)" || FAIL=1
+fi
 for f in en-US en-GB en-CA; do
     for k in "" .common; do
         [ -s "$R/$f$k.txt" ] || { echo "FAIL  missing $f$k.txt"; FAIL=1; }

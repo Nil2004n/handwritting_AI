@@ -3,3 +3,7 @@
 *.bat  text eol=crlf
 *.sh   text eol=lf
 gradlew text eol=lf
+
+# The spelling word lists, their checksum list and the verbatim SCOWL notice are BYTE-EXACT resources: the application verifies them against SHA256SUMS at load time and the
+# notice must reach users verbatim. No end-of-line conversion on any OS (a Windows checkout with core.autocrlf would otherwise turn every line into CRLF and fail the checksum).
+spelling/src/main/resources/notebookai/spelling/dict/* -text
