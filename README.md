@@ -532,6 +532,8 @@ third-party/ upstream PaddleOCR licence
 Makefile · build.gradle · settings.gradle · gradlew
 ```
 
+**Mobile developers: start with [`docs/MOBILE_HANDOFF.md`](docs/MOBILE_HANDOFF.md) (checklist, fixtures, the exact Android device tests still required).**
+
 **Engine / mobile handoff:** the OCR engine is a separate module (`engine/`) with a documented contract, pipeline specification and an
 Android proof harness: see [`docs/ENGINE.md`](docs/ENGINE.md). Android *build* integration is verified; Android *runtime* acceptance is pending
 (no device was available). Commands: `./gradlew :engine:build` (engine tests + dependency check), and
