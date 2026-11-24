@@ -51,6 +51,13 @@ function Get-Registered {
 function Get-PeSubsystem([string]$file) {      # 2 = Windows GUI (no console window), 3 = console
     $b = [IO.File]::ReadAllBytes($file); $pe = [BitConverter]::ToInt32($b, 0x3C); return [BitConverter]::ToUInt16($b, $pe + 0x5C)
 }
+# Runs a native program and returns its combined output and exit code. 'Stop' would otherwise turn EXPECTED stderr output
+# (e.g. the application's own failure message) into a terminating PowerShell error.
+function Invoke-Native([string]$file, [string[]]$arguments = @()) {
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $o = (& $file @arguments 2>&1 | ForEach-Object { "$_" }) -join "`n"; $c = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
+    return @{ Out = [string]$o; Exit = $c }
+}
 function Strip-Java { $script:old = @{ PATH = $env:PATH; JAVA_HOME = $env:JAVA_HOME }; $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'java.exe')) }) -join ';'; Remove-Item Env:\JAVA_HOME -ErrorAction SilentlyContinue }
 function Restore-Java { $env:PATH = $script:old.PATH; if ($script:old.JAVA_HOME) { $env:JAVA_HOME = $script:old.JAVA_HOME } }
 
@@ -71,13 +78,58 @@ $Prefs = Join-Path $env:APPDATA 'notebook-ai'; New-Item -ItemType Directory -For
 [IO.File]::WriteAllText((Join-Path $Prefs 'prefs.txt'), 'my preferences')
 T 'before: no notebook-ai is registered on this machine' (@(Get-Registered).Count -eq 0)
 
+Write-Host '== 1a. standard-user (NON-Administrator) install: the per-user claim, tested where it can be'
+$stdUser = 'nbaitest'; $stdDone = $false
+try {
+    $pwPlain = [guid]::NewGuid().ToString('N') + 'aA1!'
+    $sec = ConvertTo-SecureString $pwPlain -AsPlainText -Force
+    if (Get-LocalUser -Name $stdUser -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $stdUser }
+    New-LocalUser -Name $stdUser -Password $sec -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
+    $cred = New-Object System.Management.Automation.PSCredential(($env:COMPUTERNAME + '\' + $stdUser), $sec)
+    $pub = 'C:\Users\Public\nbai-std'; New-Item -ItemType Directory -Force -Path $pub | Out-Null
+    Copy-Item -LiteralPath $Exe -Destination (Join-Path $pub 'setup.exe') -Force
+    [void](Invoke-Native 'icacls.exe' @($pub, '/grant', 'Users:(OI)(CI)M'))
+    T 'the test account is a standard user (not a member of Administrators)' (@(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like ('*\' + $stdUser) }).Count -eq 0)
+    $p = Start-Process -FilePath (Join-Path $pub 'setup.exe') -ArgumentList '/qn' -Credential $cred -LoadUserProfile -WorkingDirectory $pub -PassThru
+    if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { }; Bad 'the standard-user install timed out' }
+    else {
+        Obs ("standard-user installer exit code: " + $p.ExitCode)
+        $uApp = 'C:\Users\' + $stdUser + '\AppData\Local\notebook-ai'
+        T 'a standard user (no Administrator rights) can install; files go to that user''s %LOCALAPPDATA%' (Test-Path (Join-Path $uApp 'notebook-ai.exe')) ("exit " + $p.ExitCode)
+        T 'the standard-user install created NO machine-wide (HKLM) registration' (@(Get-Registered | Where-Object { $_.Key -like '*HKEY_LOCAL_MACHINE*' }).Count -eq 0) ((Get-Registered) | Out-String)
+        $hive = 'NbaiStdHive'; $uCode = ''
+        [void](Invoke-Native 'reg.exe' @('load', ('HKU\' + $hive), ('C:\Users\' + $stdUser + '\NTUSER.DAT')))
+        try {
+            $ents = @(Get-ItemProperty ('Registry::HKEY_USERS\' + $hive + '\Software\Microsoft\Windows\CurrentVersion\Uninstall\*') -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like '*notebook-ai*' })
+            T 'the product is registered in THAT USER''s own registry hive (per-user install)' ($ents.Count -eq 1) ($ents | Out-String)
+            if ($ents.Count -ge 1) { $uCode = [regex]::Match($ents[0].PSChildName, '\{[0-9A-Fa-f-]+\}').Value }
+        } finally { [gc]::Collect(); Start-Sleep -Seconds 2; [void](Invoke-Native 'reg.exe' @('unload', ('HKU\' + $hive))) }
+        $of = Join-Path $pub 'selfcheck.txt'
+        $q = Start-Process -FilePath (Join-Path $uApp 'notebook-ai-cli.exe') -ArgumentList '--self-check' -Credential $cred -LoadUserProfile -WorkingDirectory $pub -RedirectStandardOutput $of -PassThru
+        if ($q.WaitForExit(180000)) { $sc = if (Test-Path $of) { Get-Content $of -Raw } else { '' }; T 'the standard user can run notebook-ai-cli --self-check (bundled runtime)' ($q.ExitCode -eq 0 -and $sc -like '*SELF-CHECK OK*') ("exit " + $q.ExitCode) } else { try { $q.Kill() } catch { }; Bad 'standard-user self-check timed out' }
+        if ($uCode) {
+            $u = Start-Process -FilePath 'msiexec.exe' -ArgumentList ('/x ' + $uCode + ' /qn') -Credential $cred -LoadUserProfile -WorkingDirectory $pub -PassThru
+            if ($u.WaitForExit(300000)) { T 'the standard user can uninstall' ($u.ExitCode -eq 0 -or $u.ExitCode -eq 3010) ("exit " + $u.ExitCode); T 'uninstall removed the per-user application directory' (-not (Test-Path (Join-Path $uApp 'notebook-ai.exe'))) } else { try { $u.Kill() } catch { }; Bad 'standard-user uninstall timed out' }
+        } else { Skip 'standard-user uninstall not attempted (product code not found)' }
+        $stdDone = $true
+    }
+} catch { Skip ("standard-user install could NOT be tested on this machine (harness problem, NOT a pass): " + $_.Exception.Message) }
+finally {
+    try { Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -eq ('C:\Users\' + $stdUser) } | Remove-CimInstance -ErrorAction SilentlyContinue } catch { }
+    try { if (Get-LocalUser -Name $stdUser -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $stdUser } } catch { }
+    Remove-Item -LiteralPath 'C:\Users\Public\nbai-std' -Recurse -Force -ErrorAction SilentlyContinue
+}
+T 'machine is clean again after the standard-user section (nothing registered machine-wide)' (@(Get-Registered).Count -eq 0)
+
 Write-Host '== 1. install (per user)'
 $sw = Install-Silently $Exe 'first'
 T ('silent install succeeded' + $(if ($sw) { " (switch: $sw)" } else { '' })) ($null -ne $sw)
 $reg = @(Get-Registered)
 T 'registered in the Windows uninstall list exactly once' ($reg.Count -eq 1) ($reg | Out-String)
 if ($reg.Count -ge 1) {
-    T 'the registration is per-user (HKCU), not machine-wide (HKLM) - installed without needing Administrator rights' ($reg[0].Key -like '*HKEY_CURRENT_USER*' -or $reg[0].Key -like '*HKCU*') $reg[0].Key
+    $scope = if ($reg[0].Key -like '*HKEY_LOCAL_MACHINE*') { 'HKLM (machine-wide registration)' } elseif ($reg[0].Key -like '*HKEY_CURRENT_USER*') { 'HKCU (per-user registration)' } else { $reg[0].Key }
+    Obs ("registration scope in THIS ELEVATED session: $scope. A per-user installer run by an Administrator can register machine-wide; per-user behaviour for a standard user is tested in section 1a.")
+    try { $code = [regex]::Match($reg[0].Key, '\{[0-9A-Fa-f-]+\}').Value; $wiA = New-Object -ComObject WindowsInstaller.Installer; Obs ("Windows Installer AssignmentType for " + $code + ": " + $wiA.ProductInfo($code, 'AssignmentType') + " (0 = per-user, 1 = per-machine)") } catch { Obs "could not read AssignmentType: $($_.Exception.Message)" }
     Obs ("registered name/version: " + $reg[0].Name + " " + $reg[0].Version)
 }
 $App = Join-Path $env:LOCALAPPDATA 'notebook-ai'
@@ -96,19 +148,18 @@ $wd = Join-Path $env:TEMP ('nbai wdir ' + [char]0x00E9 + [char]0x4E2D + [char]0x
 Push-Location -LiteralPath $wd
 try {
     T 'no java.exe is resolvable for this test' ($null -eq (Get-Command java.exe -ErrorAction SilentlyContinue))
-    $out = & (Join-Path $App 'notebook-ai-cli.exe') --self-check 2>&1 | Out-String
-    $rc = $LASTEXITCODE
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check'); $out = $r.Out; $rc = $r.Exit
     T 'notebook-ai-cli.exe --self-check exits 0 (cwd with spaces and non-ASCII characters)' ($rc -eq 0 -and $out.Contains('SELF-CHECK OK')) "exit=$rc $out"
     T 'it ran on the bundled runtime' ($out.Contains('Java home: ' + (Join-Path $App 'runtime')))
     T 'models were found from outside the installation directory (the working directory is elsewhere)' ($out.Contains('Checksums: OK'))
-    $out2 = & (Join-Path $App 'notebook-ai-cli.exe') --self-check extra-argument 2>&1 | Out-String; $rc2 = $LASTEXITCODE
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check', 'extra-argument'); $out2 = $r.Out; $rc2 = $r.Exit
     T 'extra arguments after --self-check are accepted and the exit status is still 0' ($rc2 -eq 0)
     $env:NOTEBOOK_AI_MODELS = (Join-Path $wd 'no models here')
-    $out3 = & (Join-Path $App 'notebook-ai-cli.exe') --self-check 2>&1 | Out-String; $rc3 = $LASTEXITCODE
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check'); $out3 = $r.Out; $rc3 = $r.Exit
     T 'an explicit NOTEBOOK_AI_MODELS override wins and the application exit status (1) is returned' ($rc3 -eq 1 -and $out3.Contains('SELF-CHECK FAILED')) "exit=$rc3"
     $mc = Join-Path $wd ('models ' + [char]0x00FC + [char]0x4E2D); Copy-Item -Recurse -LiteralPath (Join-Path $App 'models') -Destination $mc
     $env:NOTEBOOK_AI_MODELS = $mc
-    $out4 = & (Join-Path $App 'notebook-ai-cli.exe') --self-check 2>&1 | Out-String; $rc4 = $LASTEXITCODE
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check'); $out4 = $r.Out; $rc4 = $r.Exit
     T 'a models override in a directory with spaces and non-ASCII characters works' ($rc4 -eq 0 -and $out4.Contains('SELF-CHECK OK')) "exit=$rc4"
     Remove-Item Env:\NOTEBOOK_AI_MODELS
     # real OCR on a generated image through the bundled runtime (the GUI launcher cannot print, so the CLI class runs on the bundled java)
@@ -116,8 +167,8 @@ try {
     $bmp = New-Object System.Drawing.Bitmap 1500, 500; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::White)
     $f = New-Object System.Drawing.Font('Arial', 44); $g.DrawString('Hello world 123', $f, [System.Drawing.Brushes]::Black, 60, 50); $g.DrawString('Pack my box 456', $f, [System.Drawing.Brushes]::Black, 60, 220)
     $img = Join-Path $wd 'ocr input.png'; $bmp.Save($img, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
-    $ocr = & (Join-Path $App 'runtime\bin\java.exe') ('-Dnotebookai.models=' + (Join-Path $App 'models')) -cp ((Join-Path $App 'app') + '\*') notebookai.ocr.RecognizeCli $img 2>&1 | Out-String
-    T 'RecognizeCli (real OCR) on a generated image runs on the bundled runtime and reads the text' ($LASTEXITCODE -eq 0 -and $ocr.Contains('Hello world 123') -and $ocr.Contains('Pack my box 456')) $ocr
+    $r = Invoke-Native (Join-Path $App 'runtime\bin\java.exe') @(('-Dnotebookai.models=' + (Join-Path $App 'models')), '-cp', ((Join-Path $App 'app') + '\*'), 'notebookai.ocr.RecognizeCli', $img); $ocr = $r.Out
+    T 'RecognizeCli (real OCR) on a generated image runs on the bundled runtime and reads the text' ($r.Exit -eq 0 -and $ocr.Contains('Hello world 123') -and $ocr.Contains('Pack my box 456')) $ocrcr
 } finally { Pop-Location; Restore-Java }
 
 Write-Host '== 3. GUI launch (what a runner allows; --self-check is NOT a GUI acceptance test)'
@@ -143,8 +194,8 @@ if ($UpgradeExe -and (Test-Path -LiteralPath $UpgradeExe)) {
     Obs ("registered after that attempt: " + (($mid | ForEach-Object { $_.Name + ' ' + $_.Version }) -join '; '))
     T 'whatever happened, exactly one notebook-ai remains registered (no duplicate, no orphan)' ($mid.Count -eq 1)
     Strip-Java
-    $o = & (Join-Path $App 'notebook-ai-cli.exe') --self-check 2>&1 | Out-String
-    T 'the installation is still usable after the upgrade attempt while running' ($LASTEXITCODE -eq 0 -and $o.Contains('SELF-CHECK OK'))
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check'); $o = $r.Out
+    T 'the installation is still usable after the upgrade attempt while running' ($r.Exit -eq 0 -and $o.Contains('SELF-CHECK OK'))
     Restore-Java
     if (-not $gui.HasExited) { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
     if ($mid.Count -eq 1 -and $mid[0].Version -eq $bv) {
@@ -160,8 +211,8 @@ if ($UpgradeExe -and (Test-Path -LiteralPath $UpgradeExe)) {
         T 'Windows Installer reports exactly one product for the committed UpgradeCode' ($related.Count -eq 1) ("products: " + ($related -join ', '))
     } catch { Skip "could not query WindowsInstaller RelatedProducts: $($_.Exception.Message)" }
     Strip-Java
-    $o2 = & (Join-Path $App 'notebook-ai-cli.exe') --self-check 2>&1 | Out-String
-    T 'the upgraded application passes --self-check on the bundled runtime' ($LASTEXITCODE -eq 0 -and $o2.Contains('SELF-CHECK OK'))
+    $r = Invoke-Native (Join-Path $App 'notebook-ai-cli.exe') @('--self-check'); $o2 = $r.Out
+    T 'the upgraded application passes --self-check on the bundled runtime' ($r.Exit -eq 0 -and $o2.Contains('SELF-CHECK OK'))
     Restore-Java
     T 'user project and preferences survived the upgrade' ((Get-Content (Join-Path $Docs 'work.nbai') -Raw) -eq 'my project' -and (Get-Content (Join-Path $Prefs 'prefs.txt') -Raw) -eq 'my preferences')
 } else { Skip 'upgrade and file-lock tests need a higher-version installer (-UpgradeExe); none was supplied' ; if (-not $gui.HasExited) { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue } }
