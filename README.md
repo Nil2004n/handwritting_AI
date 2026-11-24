@@ -33,7 +33,7 @@ at runtime** — your images and text never leave your machine.
 6. [Image preparation and coordinates](#image-preparation-and-coordinates)
 7. [Region review](#region-review)
 8. [Command-line tools (Gradle tasks)](#command-line-tools-gradle-tasks)
-9. [Make targets](#make-targets)
+9. [Install, upgrade and uninstall](#install-upgrade-and-uninstall)
 10. [Configuration](#configuration)
 11. [Reliability behaviour](#reliability-behaviour)
 12. [Resource usage and limits](#resource-usage-and-limits)
@@ -87,28 +87,37 @@ at runtime** — your images and text never leave your machine.
 
 ## Quick start
 
-Linux, normal user (no `sudo` for building):
+Per-user installation; **no `sudo` / Administrator rights**. Build and install are separate steps.
+
+### Linux (x86-64) — tested
 
 ```sh
-# 1. Prerequisites: a JDK/JRE 21 and curl (see installation.md for details)
-java -version                 # should report 21.x for the runtime you intend to use
+# prerequisites: Java 21+ (JRE to run, JDK to build), curl, git, make (optional)
+git clone https://github.com/Nil2004n/handwritting_AI.git && cd handwritting_AI
 
-# 2. Get the code
-git clone https://github.com/Nil2004n/handwritting_AI.git
-cd handwritting_AI
+make build models        # as YOUR user: compile + stage; fetch & checksum-verify models (network once)
+make install             # per-user install (copies the staged build; never builds)
+# without make:  ./gradlew installDist && sh tools/download-models.sh && sh install.sh
 
-# 3. Build and fetch the models (as YOUR USER, never with sudo)
-make build models
+notebook-ai              # if ~/.local/bin is not on PATH the installer prints the exact line to add
+```
 
-# 4. Install into your home directory (no root needed)
-make install PREFIX="$HOME/.local"
+### Windows (x64) — implemented, **not yet tested on a real Windows machine**
 
-# 5. Run (make sure ~/.local/bin is on your PATH)
+```bat
+:: prerequisites: Java 21+ (JRE to run, JDK to build); Make is NOT required
+gradlew.bat installDist
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
+install.cmd --add-to-path
+:: open a NEW Command Prompt, then:
 notebook-ai
 ```
 
-Run straight from the source tree instead: `make run` (or `./gradlew run`). The full, step-by-step guide with
-verification and troubleshooting is in [`installation.md`](installation.md).
+`install.cmd` installs for the current user into `%LOCALAPPDATA%\Programs\Notebook-AI` and only edits your user PATH if you
+say so (`--add-to-path`, or answer the prompt). Details, options, upgrade/uninstall and the support matrix are in
+[Install, upgrade and uninstall](#install-upgrade-and-uninstall) and [`installation.md`](installation.md).
+
+Run straight from the source tree instead: `make run` or `./gradlew run`.
 
 ---
 
@@ -232,23 +241,56 @@ Private cases go in `eval-local/cases.tsv` (git-ignored; never committed).
 
 ---
 
-## Make targets
+## Install, upgrade and uninstall
 
-| Target | Purpose | Notes |
+One layout on both systems: `<APP>/{dist,models}` plus ownership marker, `INSTALL.info` and `MANIFEST.sha256`.
+The installer copies a **complete, validated, already-built** distribution; it does not build or download unless you pass `--build`.
+
+| | Linux (default) | Windows (default) |
 |---|---|---|
-| `make build` | Compile and stage the app | **Refuses to run as root** |
-| `make models` | Download + checksum-verify models | **Refuses to run as root**; needs network once |
-| `make test` | `clean build` incl. unit tests | refuses root |
-| `make verify` | `verifyOcrSetup` | refuses root |
-| `make recognize IMAGE=…` | OCR one image | refuses root |
-| `make run` | Launch the UI | needs a display; refuses root |
-| `make clean` | `gradle clean` | refuses root |
-| `make install [PREFIX=…]` | **Copy** the staged app, models and launcher | never builds; `sudo` only when the prefix needs it |
-| `make uninstall [PREFIX=…]` | Remove installed files | |
-| `make system-deps` | `apt-get install openjdk-21-jre` | asks for sudo, Debian/Ubuntu family only |
+| Entry point | `sh install.sh` (or `make install`) | `install.cmd` (Make not needed) |
+| Application directory | `${XDG_DATA_HOME:-$HOME/.local/share}/notebook-ai` | `%LOCALAPPDATA%\Programs\Notebook-AI` |
+| Command | `$HOME/.local/bin/notebook-ai` (a generated launcher) | `<app>\bin\notebook-ai.cmd` (that `bin` dir goes on your **user** PATH only with consent) |
+| Custom locations | `--app-dir DIR --bin-dir DIR` | `--app-dir DIR` |
+| System-wide | `sudo sh install.sh --prefix /usr/local` (copy only; classic `<prefix>/lib/notebook-ai` + `<prefix>/bin`) | not provided |
+| PATH | prints the exact line for your shell; never edits startup files | `--add-to-path` / prompt / `--no-path`; preserves existing entries, no duplicates, no `setx` |
+| Upgrade | re-run the installer: staged copy, hash-verified, swapped in, rolled back on failure | same |
+| Status / verify | `sh install.sh --status` | `install.cmd --status` |
+| Uninstall | `sh install.sh --uninstall` | `install.cmd --uninstall` |
 
-Why the root refusals exist: running Gradle under `sudo` once created root-owned files inside the repository
-(`build/install`), which then broke ordinary builds. See [`installation.md`](installation.md#why-builds-must-not-run-as-root).
+Common options: `--dist DIR` (staged build), `--models DIR`, `--build` (opt-in; runs Gradle as you, uses the network, refused as
+root/Administrator), `--help`. Linux also: `--prefix`, `--destdir`, `--replace-legacy`. Windows also: `--add-to-path`, `--no-path`.
+
+What the installers guarantee (and what tests exist for them):
+- Prerequisites are checked **before** anything is modified: staged distribution complete and built for **this** OS/architecture,
+  models present and matching `models/checksums.sha256`, Java 21+ found. A Linux build is never installed on Windows (or vice versa).
+- Targets are validated: absolute only, no `..`, never `/`, your home, `~/.local`, Desktop/Downloads/Documents, system directories,
+  the source repository or its parents. A non-empty directory without the ownership marker is never modified; a command file not
+  written by notebook-ai is never overwritten.
+- Upgrades copy to an installer-owned temp directory next to the target, verify every file by SHA-256, then swap; the previous
+  installation is kept until the new one is in place and is restored if any step fails. Stale libraries are never mixed in.
+- Uninstall removes only the owned application directory and owned command (and, on Windows, a PATH entry **this installer added**).
+  Projects (`.nbai`), exports, evaluation data and the parent directories are never touched.
+- Older installs from the previous `make install` (`~/.local/lib/notebook-ai`, `/usr/local/...`) are detected and reported but
+  **never migrated or deleted automatically**; `--replace-legacy` replaces only the old *command*, and prefix installs the old directory
+  in place. The old default `make install` (to `/usr/local`) is now the per-user install; use `PREFIX=/usr/local` for the old behaviour.
+- Windows: PowerShell 5.1+ is used for filesystem/PATH safety (`tools/install-windows.ps1`). `install.cmd` runs it with a
+  *process-scoped* `-ExecutionPolicy Bypass`; no policy is changed. A Group-Policy-enforced policy still wins.
+
+### Makefile (optional)
+
+`make help` lists everything. Targets: `build`, `models`, `test`, `verify`, `install`, `uninstall`, `status`, `clean`, `run`,
+`recognize IMAGE=…`, `test-install`, `system-deps`. `install`/`uninstall`/`status` only delegate to the installers; `build`/`models`/
+`test`/`verify`/`run`/`clean` refuse to run as root (and as Administrator on Windows). `clean` deletes only the Gradle `build/` output.
+Options are passed by environment, so values with spaces are safe: `make install APP_DIR="/opt/my apps/nbai" BIN_DIR="$HOME/bin"`,
+`make install PREFIX=/usr/local` (with sudo), `make build PLATFORM=win-x64` (stage a Windows distribution, e.g. from Linux).
+
+| Environment | Status |
+|---|---|
+| Linux x86-64 + GNU Make 4.x + sh | **tested** (all targets) |
+| Windows x64 + GNU Make using cmd.exe | dispatch to `gradlew.bat` / `install.cmd` implemented; **not tested** |
+| Windows without Make | fully supported through `install.cmd` + `gradlew.bat` (not tested on real Windows) |
+| MSYS2 / Git Bash / Cygwin make, NMake, macOS, BSD, Linux ARM | **unsupported**: refused with a clear message |
 
 ---
 
@@ -256,8 +298,9 @@ Why the root refusals exist: running Gradle under `sudo` once created root-owned
 
 | Setting | Where | Effect |
 |---|---|---|
-| `NOTEBOOK_AI_MODELS` | environment | Directory containing `det.onnx`, `det.yml`, `rec.onnx`, `rec.yml`, `checksums.sha256`. The installed launcher sets it to `<prefix>/lib/notebook-ai/models` unless you already set it |
-| `JAVA_HOME` | environment | Which Java runs the app; the launcher falls back to `/usr/lib/jvm/java-21-openjdk-amd64` if present and unset |
+| `NOTEBOOK_AI_MODELS` | environment | Directory containing `det.onnx`, `det.yml`, `rec.onnx`, `rec.yml`, `checksums.sha256`. The installed launcher sets it to `<app dir>/models` unless you already set it (the app resolves models from this variable, never from the working directory, so it starts from any directory) |
+| `JAVA_HOME` | environment | Which Java runs the app (Java **21 or newer** is required; the launcher checks and says so). If `JAVA_HOME` is unset and the Java on `PATH` is too old, the Linux launcher tries `$NOTEBOOK_AI_JDK_FALLBACK` (default `/usr/lib/jvm/java-21-openjdk-amd64`) |
+| `XDG_DATA_HOME` | environment (Linux) | Base for the default application directory (`$XDG_DATA_HOME/notebook-ai`, default `~/.local/share/notebook-ai`) |
 | `JAVA_OPTS` / `NOTEBOOK_AI_OPTS` | environment | Extra JVM options, e.g. `JAVA_OPTS=-Xmx4g` for very large images |
 | `-Dnotebookai.exp.cropPad=<0..1>` | JVM property | **Experiment** (default off = 1.0): recognizer crop padding fraction |
 | `-Dnotebookai.exp.beam=<n>` | JVM property | **Experiment** (default off = 0 = greedy): CTC prefix-beam width |
@@ -334,7 +377,8 @@ understanding.
 ```sh
 ./gradlew clean build              # 130 JUnit tests (as of Phase 5 closure), 0 failures
 ./gradlew verifyOcrSetup           # model sessions load; checksums enforced
-sh tools/verify-install.sh         # install safeguards in a throw-away prefix (18 checks, no sudo)
+make test-install                  # = sh tools/verify-install.sh: Linux installer + Makefile suite (145 checks, temporary locations only)
+pwsh -File tools/verify-install-windows.ps1   # Windows installer logic suite (114 checks + 4 Windows-only SKIPs when run on Linux)
 ./gradlew evaluate -PevalManifest=eval/cases.tsv
 ```
 
@@ -342,6 +386,14 @@ Evidence kinds are kept apart in [`HANDOFF.md`](HANDOFF.md): **automated tests**
 installed build under a private display, and **code inspection**. The installed-GUI checks performed were: independent
 per-page preparation, region copy/insert with real clipboard reads, reorder + exact export, save/close/reopen, filename
 behaviour, close-during-OCR, and edit-during-save. Anything not listed there was not GUI-verified.
+
+Installer evidence: the Linux suite (`tools/verify-install.sh`) really executes `install.sh`, the generated launcher and the Makefile
+in isolated temporary HOME/PATH environments (fresh install, upgrade, rollback, unsafe targets, spaces/non-ASCII paths, argument and
+exit-status forwarding, Java checks, shadowing, legacy layout, uninstall) and installs the real staged build, comparing every file
+by SHA-256. The Windows suite executes the PowerShell helper with a file-backed PATH store, but **under PowerShell on Linux**: it
+covers validation, PATH logic, staging, upgrade, rollback and uninstall; the cmd.exe wrapper, `install.cmd`, the registry PATH write and
+Windows file locking are only exercised by its `[WINDOWS-ONLY]` section (and the `installers` GitHub Actions workflow), which
+has **not been run** on real Windows.
 
 ---
 
@@ -364,7 +416,9 @@ src/main/java/notebookai/
   eval/      CER/WER, alignment, evaluate task
   ui/        JavaFX application (Main, NotebookAiApp)
 src/test/java/…   JUnit 5 tests mirroring the packages
-tools/       download-models.sh · verify-install.sh · xcheck/ (Python cross-check, optional)
+install.sh · install.cmd   installers (Linux / Windows); Makefile dispatches to them and to Gradle
+tools/       download-models.sh/.ps1 · install-windows.ps1 · verify-install.sh · verify-install-windows.ps1 · xcheck/ (Python, optional)
+.github/workflows/installers.yml   Linux + Windows installer tests (CI)
 eval/        committed evaluation manifest      eval-local/  private (git-ignored)
 samples/     sample handwriting image and transcriptions
 models/      ONNX models + checksums.sha256 (binaries git-ignored)
@@ -387,8 +441,10 @@ Verified facts:
 - Supported inputs: JPG/JPEG and PNG.
 
 Explicitly **not** verified / **not** claimed:
-- Windows and macOS (the build contains Windows launcher generation, but it was never run).
-- Privileged system installation (`sudo make install` to `/usr/local`) was not exercised in testing; the copy-only logic was verified in a temporary user-owned prefix.
+- **Windows execution**: the Windows distribution stages and its PowerShell installer logic is tested under PowerShell on Linux, but `install.cmd`, `notebook-ai.cmd`, the registry PATH update and the application itself have **never run on real Windows**. Windows support is therefore *implemented, not accepted*.
+- macOS, Linux ARM/aarch64, Windows ARM64 and 32-bit systems (rejected with a clear message).
+- Privileged system installation (`sudo sh install.sh --prefix /usr/local`) was not exercised; the copy-only logic was verified in temporary user-owned prefixes.
+- Non-ASCII install paths on Windows (depend on the console code page; tested only on Linux).
 - Crash or power-loss durability of saves. Atomic rename is used, but fsync of the directory and hardware behaviour are not claimed.
 - Recovery from every out-of-memory or fatal runtime error.
 - The default maximum project sizes under real load.
@@ -402,7 +458,12 @@ Explicitly **not** verified / **not** claimed:
 | Symptom | Likely cause / fix |
 |---|---|
 | `error: refusing to run 'make …' as root` | Intentional. Run it as your normal user; use `sudo` only for `make install` |
-| `staged app missing` on install | Run `make build models` as your user first, then install |
+| `no staged distribution at …` / `staged distribution is for 'X'` | Build it first as your normal user (`make build` / `gradlew.bat installDist`); a distribution built for another OS is rejected |
+| `… exists and is not a notebook-ai installation` | The target directory is not owned by the installer (no marker); choose another `--app-dir`. Nothing was modified |
+| `… is the command from the OLD 'make install'` | Pass `--replace-legacy` to point the command at the new install (old files stay), or remove the old one with `sh install.sh --uninstall --prefix … --replace-legacy` |
+| `notebook-ai: Java N found … Java 21 or newer is required` | Install/point `JAVA_HOME` at Java 21+ |
+| Windows: new terminal still says `'notebook-ai' is not recognized` | PATH was not added (declined) or the terminal was opened before; run `install.cmd --add-to-path` and open a **new** Command Prompt, or run the command by its full path |
+| Windows: `cannot replace … a file in it is probably in use` | Close Notebook-AI and terminals running it, then re-run; the existing installation is unchanged |
 | `models missing or invalid` | `make models` (needs network once); checks use `models/checksums.sha256` |
 | `Unsupported class file major version` during build | Gradle on too-new Java; install JDK 21 (`make system-deps`) — the Makefile pins it |
 | The command starts an *older* version | Another `notebook-ai` earlier on `PATH`; `make install` prints a WARNING naming it |

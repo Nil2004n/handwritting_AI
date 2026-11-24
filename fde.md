@@ -477,47 +477,49 @@ measurement.
 
 ## 13. Build system, packaging and install safeguards
 
-### Gradle
+### Gradle: explicit target platform
 
-- `application` plugin, `mainClass = notebookai.ui.Main`, version `0.1.0`, group `ai.notebookai`.
-- Custom tasks: `verifyOcrSetup`, `recognizeImage`, `evaluate`, `ctcProbe`, `crossCheckDump` (headless, plain classpath).
-- `run` and `startScripts` perform the JavaFX module-path split described in §3.
+`build.gradle` selects the JavaFX native classifier from an explicit **target platform**: `linux-x64` → `linux`, `win-x64` → `win`.
+Default = the build host; `-PtargetPlatform=win-x64` stages a Windows distribution from Linux (output `build/install-win-x64/notebook-ai`; a non-host
+target never overwrites `build/install/notebook-ai`). Anything else (macOS, ARM, 32-bit) fails configuration with a clear message. ONNX Runtime 1.22.0
+bundles `win-x64` and `linux-x64` natives in one jar (verified by listing it), so only JavaFX needs the classifier. The module-path surgery on the start
+scripts is parameterised by the classifier, and `installDist` writes `PLATFORM` (`platform=…`, versions) into the tree so the installers can reject a wrong-OS build.
+Before this change the generated `notebook-ai.bat` pointed at `*-linux.jar` files, i.e. the Windows launcher was unusable. **[INSPECT]** + staged output inspected: the
+Windows `.bat` now references `javafx-*-win.jar`, CRLF endings kept, no Linux jars in the tree, Windows DLLs present in the JavaFX jars.
+
+### Installers (the only install logic)
+
+`install.sh` (POSIX sh) and `install.cmd` → `tools/install-windows.ps1` implement validation, staging, swap/rollback, ownership markers, status and uninstall. The Makefile
+only dispatches. Layout (both OSes): `<APP>/{.notebook-ai-install, INSTALL.info, MANIFEST.sha256, dist/, models/}` (+ `bin/notebook-ai.cmd`, `path-state.txt` on Windows).
+
+Algorithm (both): validate distribution (PLATFORM matches host, one `notebook-ai-*.jar`, ONNX Runtime jar, JavaFX jars of the right OS and none of another) → validate models against
+the committed `checksums.sha256` → Java ≥ 21 → ownership decisions on existing targets (owned marker / legacy / foreign) → copy to `<parent>/.notebook-ai.installing.<pid>` → hash every
+copied file against the source → write manifest + info + launcher candidate → move existing app to `.previous.<pid>` → move new app in → write the command → delete previous.
+Any failure after the swap restores the previous app. Temp names are installer-created and cleaned only when they carry the marker.
+
+Target validation: absolute, no `.`/`..`, not `/`, HOME or ancestors, `~/.local`, Desktop/Downloads/Documents, system directories, the repository or its parent; command dir not inside the app dir and
+vice versa; symlinked app directories refused; newline-containing paths refused. Per-user install refused as root/Administrator; `--build` refused as root/Administrator.
+
+Windows PATH: registry value read with `DoNotExpandEnvironmentNames`, appended once, kind preserved, `WM_SETTINGCHANGE` broadcast, never `setx`; entry recorded in `path-state.txt` and removed on uninstall only if recorded.
 
 ### Makefile
 
-Targets and guard structure:
-
-```text
-build models test verify recognize run clean   ──depends on──►  check-not-root   (CURRENT_UID = id -u; refuses when 0)
-install                                        ──depends on──►  check-dist, check-models   (no Gradle, never builds)
-uninstall · system-deps · help
-```
-
-- `GRADLE_FLAGS` pins `org.gradle.java.home` to `/usr/lib/jvm/java-21-openjdk-amd64` when that path exists.
-- `install` steps (see `installation.md` §5): require staged build and valid models; require writable prefix; refuse unsafe
-  `APP_DIR` (must end in `/lib/notebook-ai`) before any deletion; remove only `<APP_DIR>/bin` and `<APP_DIR>/lib`; copy the
-  staged app and the four model files + checksums; write the launcher; warn if another `notebook-ai` on `PATH` shadows it.
-- `CURRENT_UID ?= $(shell id -u)` is overridable **only** so the guard can be tested without real root.
+Dispatcher with an explicit support matrix (`NBAI_HOST`, `NBAI_ENV_ERROR`): GNU Make 4.x on Linux tested; Windows/cmd.exe dispatch implemented and untested; MSYS2/Git Bash/Cygwin/NMake/macOS refused.
+Gradle-calling targets depend on `check-not-root` (`CURRENT_UID`, overridable only for tests). `install/uninstall/status` only call the installer. Custom directories travel through the environment
+(`"$$APP_DIR"`), so spaces are safe.
 
 ### Root-ownership incident (the reason for the guards)
 
-Evidence from the system journal: `sudo make install` → `sudo make build` → `sudo make install`. The middle command ran Gradle
-as root, creating root-owned `build/install` in the repository. Ordinary `./gradlew clean` then failed. Remedy at the time:
-the directory was renamed (not deleted) and git-excluded locally. Safeguards now: root-refusal on all Gradle/download
-targets, copy-only install, actionable messages. No recursive chown or chmod 777 is ever recommended.
+Journal evidence: `sudo make install` → `sudo make build` → `sudo make install`; the middle command ran Gradle as root, creating root-owned `build/install` in the repository. Remedy at the time: renamed,
+not deleted, git-excluded locally. Safeguards: root-refusal on all Gradle/download targets and `--build`, copy-only installers, actionable messages. No recursive chown or chmod 777 is ever recommended.
 
-### `tools/verify-install.sh` (18 checks, **[AUTO-ish]**: script-level, no sudo)
+### Installer test suites
 
-Installs into a `mktemp` prefix and asserts: install succeeds; Gradle is **not** invoked by install (stubbed `GRADLE`
-echo never appears); installed JAR hash equals staged JAR hash; launcher is executable; files owned by the invoking user;
-stale jar removed on reinstall; sibling app directory and `models/` untouched; unsafe `APP_DIR` refused with the victim
-directory intact; each of `build models test verify run clean` refuses with `CURRENT_UID=0` without reaching Gradle; a
-missing staged build fails with normal-user instructions (as uid 0 too); the shadowed-launcher warning prints.
-
-**Exercised:** user-local installs (including the real `~/.local`). **[UNVERIFIED]:** `sudo make install` to `/usr/local`
-(privileged behaviour was intentionally not run).
-
----
+- `tools/verify-install.sh` (145 checks, `make test-install`): runs the real installer, launcher and Makefile in isolated temporary HOME/PATH environments with fixture distributions (stub start script echoing
+  arguments and returning a chosen status), fake `java`/`uname`/`id`/`cp`/`mv` for failure injection, plus the real staged build compared file-by-file by SHA-256. **Executed on Linux.**
+- `tools/verify-install-windows.ps1` (114 checks + 4 Windows-only SKIPs when run on Linux): pure validation/PATH/Java-parsing/wrapper-text tests, and the whole helper as a child process in test mode
+  (file-backed PATH store, platform override, failure seams). The `[WINDOWS-ONLY]` section runs `install.cmd`/`notebook-ai.cmd` under cmd.exe and **has not been executed anywhere**; `.github/workflows/installers.yml`
+  would run it on a real Windows runner (also not run).
 
 ## 14. Testing strategy and evidence
 
