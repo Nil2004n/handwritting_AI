@@ -1025,3 +1025,38 @@ Packaging tests in a fresh clone with `-PreleaseOutputDir=/tmp/x`; do not run `d
 
 ### Not done / limits
 Release blockers unchanged: A) xmpcore notice evidence and explicit model redistribution grant (models are also bundled in the Android proof APK); B) real publisher/maintainer details, GA runtime validation (the local `.deb` here was built with a Debian early-access JDK), platform coverage; C) signing, icon, lintian. Nothing was pushed, tagged or released.
+
+
+## Offline English spelling assistance (2026-11-24)
+
+Design, rules, contracts, limits and measurements: **`docs/SPELLING.md`**. Suggestion-first only; **automatic replacement is not implemented (deferred)**; raw OCR, the OCR engine and the project file format are unchanged.
+
+### What exists
+* `spelling/` Gradle module (pure Java 17, no dependencies, Android-bound by design): `SpellBackend` contract (returns information, never text changes; UTF-16 ranges), `WordListBackend`, `PersonalWords`, token rules (URLs/e-mail/paths/code/equations/identifiers/mixed case/acronyms skipped).
+  Backend/dictionary identity: **SCOWL 2020.12.07 plain word lists (en-US, en-GB, en-CA) taken byte-for-byte from Debian `wamerican`/`wbritish`/`wcanadian` (+`-small` as a ranking tier) 2020.12.07-4**, with the verbatim SCOWL notice, `PROVENANCE.txt`, `SHA256SUMS` (checked at load) and `tools/verify-spelling-dictionaries.sh`.
+  **Not Microsoft/Office/Windows dictionaries; nothing is Microsoft-backed.** The Windows Spell Checking API was investigated and not adopted (Windows 8+ COM; languages depend on the machine; JDK 21's FFM API is preview; cannot serve Linux/Android): see docs/SPELLING.md section 3.
+* Desktop: `notebookai.assist` (controller, bounded service, `SafeReplace`, personal dictionary/preference stores, `UserDataDir`) and `notebookai.ui.SpellingPanel` beside the existing `TextArea`; four behavior-preserving extractions in `NotebookAiApp` (`addImageFiles`, `openProjectFile`, `saveProjectTo`, `exportCurrentTo`) so the flows after native file choosers are callable by the GUI acceptance.
+* Personal dictionary/preferences: per user (`NOTEBOOK_AI_CONFIG_DIR` > `-Dnotebookai.config.dir` > `~/.config/notebook-ai` | `%APPDATA%\notebook-ai`), atomic, versioned, malformed-tolerant, never bundled. Ignore Once (per page occurrence, session) and Ignore All (all pages, until restart) are separate from it.
+* Packaging: `notebookai-spelling-<ver>.jar` joins the distributions/native inputs (6 application jars); `licenses/scowl/{SCOWL-COPYRIGHT.txt,PROVENANCE.txt,wordlists.sha256}` shipped and required; THIRD-PARTY-NOTICES lists SCOWL; `licensing-status.json` item `scowl-wordlists` (resolved; no legal review); `--self-check` also loads the three dictionaries.
+
+### Executed verification (Linux x64; commands in docs/SPELLING.md section 14)
+| Item | Source | Result |
+|---|---|---|
+| Unit tests (clean clone of the final commit) | `f65a9c6` | **227 passed, 0 failed, 0 skipped**: desktop 163 (incl. 37 assist), engine 36, spelling 28; `verifySpellingDependencies`: no dependencies; `SpellingBoundaryTest`/`EngineBoundaryTest` pass |
+| Desktop GUI acceptance (`xvfb-run -a ./gradlew spellingGuiAcceptance`, real app + real OCR + real backend, isolated user dir, generated non-private images) | `f65a9c6`, clean clone; app jar SHA-256 `ead33cf0…`, engine `0da51d6e…`, spelling `572a399c…` | **33/33**: issues shown for real OCR text; exact-occurrence selection (second "teh" at offset 23, not 10); suggestion/custom replacement change only the range; Undo/Redo; Ignore Once/All; add/remove personal word (file written/removed in the user dir); stale issue after an edit refused; page isolation; save/reopen exact raw+edited text; export bytes equal the transcript; Restore Raw through the real confirmation; restart keeps language + personal dictionary; backend failure and disabled assistance leave editing working; checking/selecting never dirties the project. One UI bug found and fixed by this run (Remove button never enabled). |
+| Raw OCR regression | `f65a9c6` | `verifyOcrSetup` valid; repo case CER 0.179 (12/67) WER 0.385; private case CER 0.055 (5/91) WER 0.167; all boundary fingerprints identical to the pre-refactor baseline (public; private hash-only) |
+| Packaging (clean clone, isolated output dir) | `d08828d` (+ later commits touched only tests/docs/tools) | `distLinux` valid (41 files), ZIP end-to-end **50/50**, `packageDeb` + `test-deb.sh` **48 passed, 0 failed, 1 skipped (lintian not installed)** incl. installed `--self-check` from `/`, Windows static input valid (6 jars), `test-dist-build.sh` 16/16; `verifyReleaseLicensing` unchanged and still fails (xmpcore-license, ppocrv6-model-redistribution); no personal-dictionary/preferences file in the ZIP, `.deb` or dist tree; `release-output/` byte-identical to its pre-work hashes |
+| Android build | `f65a9c6` | `verifyEngineAndroidApi`: 428 JDK references (engine + spelling), none above API 24; the proof APK dexes the spelling module (72,775,219 bytes); build only |
+| Performance (desktop JVM; `spellingPerf`) | `f65a9c6` | init 218 ms (en-US) / +51 MB heap for all three languages; 300k-char limit check 11.7 ms; suggestions mean 8.2 ms (worst 30.9); 1000 rapid submissions → 41 checks, max pending 1; 2000 page checks flat memory/threads |
+| Assisted accuracy (simulation: always accept top-1; NOT product behavior) | `f65a9c6` | handwriting sample raw 0.179/0.385 → 0.164/0.308 (3 replacements: 1 helpful, 2 neutral and wrong); private aggregate 0.055 → 0.022 (3 replacements, 2 helpful); one sample each: no claim of general improvement |
+
+### Status
+1. **Implementation complete:** suggestion-first spelling assistance with the required desktop UI; Replace All and automatic replacement deferred.
+2. **Automated verification: PASSED on Linux** (above).
+3. **Desktop GUI acceptance: PASSED** (33/33, in-process under Xvfb). Not done: pixel/click-level automation of native file dialogs (the flows were entered right after the choosers); not run on Windows.
+4. **Android compatibility:** build-level only (API ≤ 24 check, D8, APK). **Runtime PENDING** (no device; the dictionaries, checker and personal-dictionary storage are untested on Android).
+5. **Packaging acceptance:** Linux ZIP and `.deb` PASSED; Windows static only; the CI smoke workflow `installer-smoke.yml` was not changed and **not run** (its earlier result covers commit `3cffc4f` only).
+6. **Release readiness: NOT release-approved.** Unchanged blockers: A) xmpcore notice evidence and explicit model redistribution grant; B) publisher/maintainer details, GA runtime validation, platform coverage; C) signing, icon, lintian. Spelling adds the `scowl-wordlists` item (resolved, no legal review).
+
+### Not done / limits
+Dictionary lookup cannot find real-word OCR errors ("form"/"from"); names and technical terms are reported as unknown, not wrong; en-AU not offered; suggestion ranking is a weak heuristic; Ignore Once ordinals can shift; no inline underlines.
