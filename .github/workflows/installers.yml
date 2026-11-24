@@ -23,7 +23,7 @@ jobs:
         with:
           distribution: temurin
           java-package: jdk
-          java-version: '21.0.13+9'
+          java-version: '21.0.13+9.0.LTS'
       - name: Build, fetch + verify models
         run: make build models
       - name: Installer tests (temporary locations only)
@@ -45,7 +45,7 @@ jobs:
         with:
           distribution: temurin
           java-package: jdk
-          java-version: '21.0.13+9'
+          java-version: '21.0.13+9.0.LTS'
       - name: Build the Windows distribution
         shell: cmd
         run: gradlew.bat installDist

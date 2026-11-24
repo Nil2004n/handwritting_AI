@@ -941,7 +941,7 @@ No binaries, models, archives or installers tracked (only the pre-existing sampl
 6. Added `-PnativeAppVersion` (test-only; marks the build internal) so CI can build a higher-version installer for a genuine upgrade test.
 
 ### Toolchain decisions (verified, not assumed)
-- **JDK:** the old pin `21.0.7+6` was nine quarterly updates behind. Adoptium's API lists Temurin 21.0.13+9 (2026-10-22) as the latest regular GA (21.0.13.1+2, 2026-11-18, is an out-of-band follow-up and was not chosen). `actions/setup-java` resolves versions by matching the full Adoptium list, so the job additionally FAILS unless `java -version` reports Temurin 21.0.13, `jmods` exists and `jpackage.exe` exists.
+- **JDK:** the old pin `21.0.7+6` was nine quarterly updates behind. Adoptium's API lists Temurin 21.0.13+9 (2026-10-22) as the latest regular GA (21.0.13.1+2, 2026-11-18, is an out-of-band follow-up and was not chosen). `actions/setup-java` resolves versions by matching the full Adoptium list and, for a build-qualified version, by EXACT semver equality: the string must be Adoptium's `21.0.13+9.0.LTS` (`21.0.13+9` fails with "Could not find satisfied version" - found by the second CI run - so the earlier pin was never valid). The job additionally FAILS unless `java -version` reports Temurin 21.0.13, `jmods` exists and `jpackage.exe` exists.
 - **WiX:** 3.14.1 from the official `wixtoolset/wix3` release asset `wix314.exe` (32,438,176 bytes). The release publishes no digest; SHA-256 `6bf6d03d6923d9ef827ae1d943b90b42b8ebb1b0f68ef6d55f868fa34c738a29` was computed from the download and is verified in the job (trust-on-first-use, disclosed). JDK 21 jpackage supports WiX 3.x only.
 - **Actions** (pinned SHAs): checkout v4.4.0, setup-java v4.9.1, upload-artifact v4.6.2.
 

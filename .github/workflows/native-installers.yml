@@ -35,8 +35,10 @@ concurrency:
 
 env:
   # Temurin 21 GA (regular quarterly update, released 2026-10-22). The job FAILS unless the runtime it ends up with really is this version.
-  TEMURIN_VERSION: '21.0.13+9'
-  EXPECTED_JAVA: '21.0.13'
+  # setup-java matches a build-qualified version by EXACT semver equality, and Adoptium publishes this release as '21.0.13+9.0.LTS'
+  # ('21.0.13+9' never matches; a plain '21.0.13' would also match the out-of-band 21.0.13.1+2 hotfix, which is deliberately not used).
+  TEMURIN_VERSION: '21.0.13+9.0.LTS'
+  EXPECTED_JAVA: '21.0.13+9'
   # WiX Toolset 3.14.1 (the last 3.x): JDK 21's jpackage supports WiX 3.x only (WiX 4/5 support arrived in JDK 24).
   # Official release asset https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe (32,438,176 bytes);
   # the SHA-256 below was computed from that download when this workflow was prepared (the release publishes no digest).
@@ -80,24 +82,33 @@ jobs:
           $v = (& java -version 2>&1 | Out-String)
           $v
           if ($v -notmatch 'Temurin') { throw 'the JDK is not Eclipse Temurin' }
-          if ($v -notmatch [regex]::Escape($env:EXPECTED_JAVA)) { throw "the JDK is not $env:EXPECTED_JAVA" }
+          if ($v -notmatch [regex]::Escape($env:EXPECTED_JAVA)) { throw "the JDK is not $env:EXPECTED_JAVA (expected the exact GA build)" }
           if (-not (Test-Path "$env:JAVA_HOME\jmods")) { throw 'the JDK has no jmods directory (jlink needs it)' }
           if (-not (Test-Path "$env:JAVA_HOME\bin\jpackage.exe")) { throw 'the JDK has no jpackage' }
           "JDK:`n$v`nJAVA_HOME=$env:JAVA_HOME`n$(Get-Content "$env:JAVA_HOME\release" -Raw)" | Add-Content build\ci\identity.txt
 
-      - name: Install WiX Toolset 3.14.1 (verified)
+      - name: WiX Toolset 3.x (pre-installed 3.14 if present, else the pinned and hash-verified 3.14.1)
         run: |
           $ErrorActionPreference = 'Continue'
-          Invoke-WebRequest -Uri $env:WIX_URL -OutFile wix314.exe -UseBasicParsing
-          $h = (Get-FileHash wix314.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($h -ne $env:WIX_SHA256) { throw "WiX installer hash mismatch: $h" }
-          $p = Start-Process -FilePath .\wix314.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "WiX installer exit code $($p.ExitCode)" }
-          $bin = Get-ChildItem 'C:\Program Files (x86)' -Filter 'WiX Toolset v3*' | Select-Object -First 1 | ForEach-Object { Join-Path $_.FullName 'bin' }
-          if (-not $bin -or -not (Test-Path (Join-Path $bin 'candle.exe'))) { throw 'WiX 3.x tools not found after installation' }
+          $root = 'C:\Program Files (x86)'
+          $bin = $null
+          $found = Get-ChildItem $root -Filter 'WiX Toolset v3.14*' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found -and (Test-Path (Join-Path $found.FullName 'bin\candle.exe'))) { $bin = Join-Path $found.FullName 'bin'; $how = "pre-installed on the runner image ($($found.Name))" }
+          if (-not $bin) {
+            Invoke-WebRequest -Uri $env:WIX_URL -OutFile wix314.exe -UseBasicParsing
+            $h = (Get-FileHash wix314.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($h -ne $env:WIX_SHA256) { throw "WiX installer hash mismatch: $h" }
+            $p = Start-Process -FilePath .\wix314.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "WiX installer exit code $($p.ExitCode)" }
+            $found = Get-ChildItem $root -Filter 'WiX Toolset v3*' | Select-Object -First 1
+            if ($found) { $bin = Join-Path $found.FullName 'bin' }
+            $how = "installed from the official release asset, sha256 $h"
+          }
+          if (-not $bin -or -not (Test-Path (Join-Path $bin 'candle.exe'))) { throw 'WiX 3.x tools not found' }
           Add-Content $env:GITHUB_PATH $bin
           $ver = (& (Join-Path $bin 'candle.exe') -? 2>&1 | Select-String -Pattern 'version' | Select-Object -First 1)
-          "WiX: $ver`nWiX installer sha256: $h" | Tee-Object -FilePath build\ci\wix.txt | Add-Content build\ci\identity.txt
+          if ("$ver" -notmatch 'version 3\.') { throw "candle.exe is not a WiX 3.x tool: $ver" }
+          "WiX: $ver`nWiX source: $how`nWiX bin: $bin" | Tee-Object -FilePath build\ci\wix.txt | Add-Content build\ci\identity.txt
 
       - name: Models (checksums verified against models/checksums.sha256)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
