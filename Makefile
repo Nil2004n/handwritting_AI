@@ -80,6 +80,7 @@ endif
 
 .PHONY: help build models test verify recognize run clean install uninstall status test-install system-deps \
         dist dist-linux dist-windows verify-dist package package-linux package-windows dist-clean test-dist \
+        package-deb package-exe package-native verify-deb test-deb verify-release-licensing \
         check-env check-not-root
 
 help:
@@ -99,6 +100,10 @@ help:
 	@echo "  dist              both                   verify-dist    re-validate the generated directories"
 	@echo "  package           release-output/notebook-ai-<ver>-{linux,windows}-x64.zip + .sha256 (only from validated dist dirs)"
 	@echo "  package-linux | package-windows | dist-clean (removes only output this build generated) | test-dist"
+	@echo "Native installers (jpackage, bundled Java runtime; built on their own OS only):"
+	@echo "  package-deb       Debian/Ubuntu x86-64 host -> release-output/notebook-ai_<ver>_amd64.deb   (needs dpkg-deb fakeroot ldd; JDK 21 with jmods)"
+	@echo "  package-exe       Windows x64 host         -> release-output/notebook-ai-<ver>-windows-x64-setup.exe (needs WiX 3.x on PATH)"
+	@echo "  package-native    the installer type of THIS host   verify-deb   test-deb (no root)   verify-release-licensing (fails while evidence is unresolved)"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
@@ -186,6 +191,25 @@ package-windows: check-not-root
 
 dist-clean: check-not-root
 	$(GRADLEW) cleanDist
+
+# Native installers: Gradle does the work; wrong hosts fail early with an actionable message.
+package-deb: check-not-root
+	$(GRADLEW) packageDeb
+
+package-exe: check-not-root
+	$(GRADLEW) packageExe
+
+package-native: check-not-root
+	$(GRADLEW) packageNative
+
+verify-deb: check-not-root
+	$(GRADLEW) verifyDeb
+
+verify-release-licensing: check-not-root
+	$(GRADLEW) verifyReleaseLicensing
+
+test-deb: check-env
+	sh tools/test-deb.sh
 
 # End-to-end distribution tests (extract the archive, run, install, uninstall); needs 'make package-linux' first.
 test-dist: check-env

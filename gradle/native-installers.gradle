@@ -1,0 +1,436 @@
+// =====================================================================================================
+// Native installers built with jpackage: notebook-ai_<ver>_amd64.deb (Linux) and notebook-ai-<ver>-windows-x64-setup.exe (Windows).
+//
+//   ./gradlew packageDeb      (Debian/Ubuntu x86-64 host; -PpublisherName=... -PdebMaintainerEmail=...)        gradlew.bat packageExe      (Windows x64 host, WiX 3.x)
+//   ./gradlew packageNative   (selects the current host's type)  ./gradlew verifyDeb         (re-validates the .deb)
+//
+// Native packages are built ON their target OS (jpackage cannot cross-build). They reuse the platform payload produced and
+// validated by the ZIP pipeline (linux-dist/app, win-dist/app) and add a bundled runtime. Nothing here runs in the normal build.
+// A build with unresolved license evidence is an INTERNAL build: it is allowed, clearly marked in native-package.json, and
+// ./gradlew verifyReleaseLicensing still fails for it.
+// =====================================================================================================
+import java.nio.file.Files
+import java.nio.file.Paths
+
+final String WIN_UPGRADE_UUID = '6ac77948-495e-4e24-b379-4d90790b06c7'   // generated once; MUST stay constant across versions or upgrades create duplicate apps
+final String APP_NAME = 'notebook-ai'
+final String RUNTIME_MODULES = 'java.base,java.desktop,java.logging,java.xml,java.prefs,jdk.unsupported,jdk.jfr,jdk.charsets'
+final String DEB_FX_DEPENDS = 'libgtk-3-0t64 | libgtk-3-0, libgl1, libx11-6, libxtst6, libxxf86vm1, libxrender1, libxi6, libfreetype6, libfontconfig1, libpangoft2-1.0-0, libstdc++6, libgcc-s1'
+final String APP_DESCRIPTION = 'Offline handwritten-text OCR: prepare images, extract text, review and export. Bundles its own Java runtime.'
+
+def hostOs = System.getProperty('os.name').toLowerCase()
+def hostArch = System.getProperty('os.arch').toLowerCase()
+boolean onLinux = hostOs.contains('linux')
+boolean onWindows = hostOs.contains('windows')
+boolean archOk = (hostArch == 'amd64' || hostArch == 'x86_64')
+
+def sha = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.withInputStream { is -> byte[] b = new byte[65536]; int n; while ((n = is.read(b)) > 0) { md.update(b, 0, n) } }
+    md.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+def relList = { File root ->
+    List<String> out = []
+    root.eachFileRecurse(groovy.io.FileType.FILES) { File f -> out << root.toPath().relativize(f.toPath()).toString().replace('\\', '/') }
+    out.sort(); out
+}
+// Runs an external tool (no shell), fails with its output on a non-zero exit.
+def runTool = { List<String> cmd, File dir = null, Map<String, String> env = [:] ->
+    ProcessBuilder pb = new ProcessBuilder(cmd.collect { it.toString() }).redirectErrorStream(true)
+    if (dir != null) { pb.directory(dir) }
+    env.each { k, v -> pb.environment().put(k, v) }
+    Process p = pb.start()
+    String out = p.inputStream.getText('UTF-8'); p.waitFor()
+    if (p.exitValue() != 0) { throw new GradleException("command failed (exit ${p.exitValue()}): ${cmd.join(' ')}\n${out}") }
+    out
+}
+def which = { String exe ->
+    String path = System.getenv('PATH') ?: ''
+    for (String d : path.split(File.pathSeparator)) { File f = new File(d, exe); if (f.isFile() && f.canExecute()) { return f } }
+    null
+}
+def gitInfo = { List<String> a -> try { Process p = new ProcessBuilder(['git'] + a).directory(rootProject.projectDir).redirectErrorStream(true).start(); String o = p.inputStream.text.trim(); p.waitFor(); p.exitValue() == 0 ? o : null } catch (Exception e) { null } }
+
+// ---- packaging JDK: explicit, identified, never an arbitrary download ----
+def packagingJdk = { ->
+    String p = project.findProperty('packagingJdkHome') ?: System.getenv('NBAI_PACKAGING_JDK')
+    File home = p ? new File(p) : null
+    if (home == null) {
+        String jh = System.getenv('JAVA_HOME')
+        if (jh && new File(jh, 'jmods').isDirectory()) { home = new File(jh) }
+    }
+    if (home == null) { home = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }.get().metadata.installationPath.asFile }
+    String exe = onWindows ? '.exe' : ''
+    if (!new File(home, 'bin/jpackage' + exe).isFile() || !new File(home, 'bin/jlink' + exe).isFile()) { throw new GradleException("The packaging JDK '${home}' has no jpackage/jlink. Point -PpackagingJdkHome=<JDK 21 home> at a full JDK 21.") }
+    if (!new File(home, 'jmods').isDirectory()) { throw new GradleException("The packaging JDK '${home}' has no jmods/ directory, which jlink needs to build the runtime. Use a full JDK 21 (Temurin 21 or a distro JDK with jmods).") }
+    Properties rel = new Properties(); new File(home, 'release').withInputStream { rel.load(it) }
+    String rv = (rel.getProperty('JAVA_RUNTIME_VERSION') ?: rel.getProperty('JAVA_VERSION') ?: '').replace('"', '')
+    String ver = (rel.getProperty('JAVA_VERSION') ?: '').replace('"', '')
+    if (!ver.startsWith('21.')) { throw new GradleException("The packaging JDK is Java ${ver}; this build is pinned to Java 21 (the application baseline).") }
+    [home: home, version: ver, runtimeVersion: rv, implementor: (rel.getProperty('IMPLEMENTOR') ?: 'unknown').replace('"', ''), ea: (rv =~ /(^|[-+.])ea([-+.]|$)/).find()]
+}
+
+def requireHost = { String want ->
+    if (!archOk) { throw new GradleException("Native installers are built for x86-64 only; this host is ${hostArch}.") }
+    if (want == 'linux' && !onLinux) { throw new GradleException("The .deb must be built on a Debian/Ubuntu Linux x86-64 host (jpackage cannot cross-build); this host is ${hostOs}.") }
+    if (want == 'windows' && !onWindows) { throw new GradleException("The .exe must be built on a Windows x64 host (jpackage cannot cross-build); this host is ${hostOs}. Use the windows job in .github/workflows/native-installers.yml.") }
+}
+def requireNotPrivileged = { ->
+    if (onLinux && 'id -u'.execute().text.trim() == '0') { throw new GradleException('Refusing to build native packages as root (it would create root-owned files). Run as your normal user.') }
+}
+
+def publisher = { ->
+    String name = project.findProperty('publisherName')
+    String maint = project.findProperty('debMaintainerEmail')   // jpackage builds "Maintainer: <vendor> <email>" from these two
+    // Unset values are NOT invented: a clearly marked placeholder (".invalid" is a reserved, non-routable domain) is used and the build is flagged internal.
+    [name: name ?: 'Notebook-AI (publisher not configured)', maintainer: maint ?: 'unconfigured@invalid',
+     configured: (name != null && maint != null)]
+}
+def licensingState = { ->
+    def items = new groovy.json.JsonSlurper().parse(new File(rootProject.projectDir, 'packaging/licensing-status.json')).items
+    [unresolvedBlocking: items.findAll { it.releaseBlocking && it.status != 'resolved' }.collect { it.id }, statusSha256: sha(new File(rootProject.projectDir, 'packaging/licensing-status.json'))]
+}
+
+// ---- generic native input staging from the validated ZIP payload ----
+def stageNativeInput = { String tname, Map spec, String dirName ->
+    File root = rootProject.projectDir
+    File dist = new File(root, spec.dir)
+    File base = new File(root, "build/native/${spec.os}")
+    if (base.exists()) { base.deleteDir() }               // always start clean: old packages can never leak into a new one
+    File input = new File(base, 'input'); File content = new File(base, 'content')
+    input.mkdirs(); new File(content, 'fx').mkdirs(); new File(content, 'models').mkdirs(); new File(content, 'legal').mkdirs()
+    new File(base, 'work').mkdirs(); new File(base, 'out').mkdirs()
+    File lib = new File(dist, 'app/lib')
+    lib.listFiles().findAll { it.isFile() }.each { f ->
+        if (f.name.startsWith('javafx-')) { new File(content, 'fx/' + f.name).bytes = f.bytes } else { new File(input, f.name).bytes = f.bytes }
+    }
+    new File(dist, 'app/models').listFiles().findAll { it.isFile() }.each { new File(content, 'models/' + it.name).bytes = it.bytes }
+    ['LICENSE', 'THIRD-PARTY-NOTICES.txt'].each { new File(content, 'legal/' + it).bytes = new File(dist, it).bytes }
+    new File(content, 'legal/licenses').mkdirs()
+    new File(dist, 'licenses').eachFileRecurse(groovy.io.FileType.FILES) { f -> File t = new File(content, 'legal/licenses/' + new File(dist, 'licenses').toPath().relativize(f.toPath()).toString()); t.parentFile.mkdirs(); t.bytes = f.bytes }
+    base
+}
+
+def parseChecksumsN = { File f -> Map m = [:]; f.eachLine('UTF-8') { l -> def x = (l =~ /^([0-9a-fA-F]{64})\s+\*?(\S.*)$/); if (x.find()) { m[x.group(2).trim()] = x.group(1).toLowerCase() } }; m }
+final List<String> MODEL_FILES_N = ['det.onnx', 'det.yml', 'rec.onnx', 'rec.yml']
+
+// Validates exactly what jpackage will be given: target-platform libraries only, verified models, license documents, nothing else.
+def validateNativeInput = { File base, Map spec ->
+    List<String> problems = []
+    def bad = { String m -> problems << m }
+    String cls = spec.os == 'windows' ? 'win' : 'linux'; String nat = spec.os == 'windows' ? 'win-x64' : 'linux-x64'
+    List<String> inputJars = new File(base, 'input').list() as List
+    Set<String> expectInput = ["notebook-ai-${project.version}.jar", 'onnxruntime-1.22.0.jar', 'metadata-extractor-2.19.0.jar', 'xmpcore-6.1.11.jar'] as Set
+    if (inputJars as Set != expectInput) { bad("jpackage input must be exactly ${expectInput}, found ${inputJars}") }
+    List<String> fx = new File(base, 'content/fx').list() as List
+    if (fx.sort() != ['base', 'controls', 'graphics'].collect { "javafx-${it}-21.0.7-${cls}.jar".toString() }.sort()) { bad("JavaFX content must be the three ${cls} jars, found ${fx}") }
+    File ort = new File(base, 'input/onnxruntime-1.22.0.jar')
+    if (ort.isFile()) {
+        Set<String> found = new TreeSet<>(); def zf = new java.util.zip.ZipFile(ort)
+        try { zf.entries().each { e -> def m = (e.name =~ /^ai\/onnxruntime\/native\/([^\/]+)\//); if (m.find()) { found << m.group(1) } } } finally { zf.close() }
+        if (found != [nat] as Set) { bad("ONNX Runtime natives ${found} != [${nat}]") }
+    }
+    Map want = parseChecksumsN(new File(base, 'content/models/checksums.sha256'))
+    MODEL_FILES_N.each { m -> File f = new File(base, 'content/models/' + m); if (!f.isFile() || sha(f) != want[m]) { bad("model ${m} missing or checksum mismatch") } }
+    ['LICENSE', 'THIRD-PARTY-NOTICES.txt', 'licenses/licensing-status.json', 'licenses/onnxruntime/LICENSE', 'licenses/openjfx/LICENSE'].each { r -> if (!new File(base, 'content/legal/' + r).isFile()) { bad("legal document missing: ${r}") } }
+    relList(new File(base, 'input')).each { if (!it.endsWith('.jar')) { bad("non-jar in jpackage input: ${it}") } }
+    (relList(new File(base, 'input')) + relList(new File(base, 'content'))).each { f ->
+        if (f =~ /(-linux\.jar|-win\.jar)$/ && !(f =~ /-${cls}\.jar$/)) { bad("other-platform jar: ${f}") }
+        if (f =~ /(\.git\/|\/src\/|\.nbai$|\.zip$|\.deb$|\.exe$|\.msi$|linux-dist|win-dist|release-output|eval-local)/) { bad("must not ship: ${f}") }
+    }
+    problems
+}
+// ---- runtime image (jlink) from the identified packaging JDK ----
+def buildRuntime = { String os ->
+    def jdk = packagingJdk()
+    String exe = onWindows ? '.exe' : ''
+    File rt = new File(rootProject.projectDir, "build/native/${os}/runtime")
+    if (rt.exists()) { rt.deleteDir() }
+    runTool([new File(jdk.home, 'bin/jlink' + exe).path, '--module-path', new File(jdk.home, 'jmods').path, '--add-modules', RUNTIME_MODULES,
+             '--strip-debug', '--no-header-files', '--no-man-pages', '--compress', 'zip-6', '--output', rt.path])
+    String mods = runTool([new File(rt, 'bin/java' + exe).path, '--list-modules'])
+    RUNTIME_MODULES.split(',').each { m -> if (!(mods =~ /(?m)^${java.util.regex.Pattern.quote(m)}(@|$)/).find()) { throw new GradleException("runtime image lacks required module ${m}") } }
+    if (!new File(rt, 'legal').isDirectory()) { throw new GradleException('runtime image has no legal/ directory (JDK license files); refusing to package a runtime without its license files') }
+    jdk + [runtimeDir: rt, modules: RUNTIME_MODULES.split(',') as List]
+}
+
+// ---- identity / provenance file shipped inside every native package ----
+def writeNativeMeta = { String os, Map spec, Map jdk, File legalDir, String extraVersion ->
+    File dist = new File(rootProject.projectDir, spec.dir)
+    def pub = publisher(); def lic = licensingState()
+    String commit = gitInfo(['rev-parse', 'HEAD']) ?: 'unknown'
+    String porcelain = gitInfo(['status', '--porcelain'])
+    boolean dirty = porcelain == null ? true : !porcelain.isEmpty()
+    List<String> internalReasons = []
+    if (lic.unresolvedBlocking) { internalReasons << ('unresolved license evidence: ' + lic.unresolvedBlocking.join(', ')) }
+    if (jdk.ea) { internalReasons << "early-access runtime (${jdk.runtimeVersion})" }
+    if (!pub.configured) { internalReasons << 'publisher/maintainer not configured' }
+    if (dirty) { internalReasons << 'source tree had uncommitted changes' }
+    Map meta = [
+        generator: 'notebook-ai gradle native installer', schemaVersion: 1,
+        application: [name: 'notebook-ai', version: project.version.toString(), packageVersion: extraVersion],
+        target: [os: os, arch: 'x64'],
+        source: [commit: commit, dirty: dirty],
+        generatedUtc: java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString(),
+        payloadFrom: [distribution: spec.dir, distributionJsonSha256: sha(new File(dist, 'distribution.json'))],
+        runtime: [bundled: true, vendor: jdk.implementor, version: jdk.version, runtimeVersion: jdk.runtimeVersion, earlyAccess: jdk.ea,
+                  modules: jdk.modules, source: 'JDK identified by -PpackagingJdkHome / NBAI_PACKAGING_JDK / JAVA_HOME / the Gradle toolchain; never downloaded by this build'],
+        licensing: [statusFile: 'licenses/licensing-status.json', unresolvedBlocking: lic.unresolvedBlocking],
+        publisher: [name: pub.name, configured: pub.configured],
+        signing: [signed: false, note: 'Not signed unless an external signing step is configured and succeeds; see README'],
+        internalBuild: !internalReasons.isEmpty(), internalBuildReasons: internalReasons,
+    ]
+    new File(legalDir, 'native-package.json').text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(meta)) + '\n'
+    meta
+}
+
+def jpackageCommon = { String os, File base, Map jdk, String type ->
+    String exe = onWindows ? '.exe' : ''
+    String ver = project.version.toString()
+    if (!(ver ==~ /\d+(\.\d+){0,2}/)) { throw new GradleException("jpackage needs a numeric version (X.Y.Z); project version is '${ver}'") }
+    String sep = onWindows ? '\\' : '/'
+    def pub = publisher()
+    String lic = new File(rootProject.projectDir, 'LICENSE').readLines().find { it.startsWith('Copyright') } ?: ''
+    List<String> c = [new File(jdk.home, 'bin/jpackage' + exe).path, '--type', type, '--name', APP_NAME, '--app-version', ver,
+        '--input', new File(base, 'input').path, '--main-jar', "notebook-ai-${ver}.jar", '--main-class', 'notebookai.ui.Main',
+        '--runtime-image', jdk.runtimeDir.path,
+        '--app-content', new File(base, 'content/fx').path, '--app-content', new File(base, 'content/models').path, '--app-content', new File(base, 'content/legal').path,
+        // JavaFX stays on the module path (never on the classpath); models are located through a system property because
+        // a native launcher cannot set NOTEBOOK_AI_MODELS (an explicit NOTEBOOK_AI_MODELS still wins, see ModelConfig).
+        '--java-options', "--module-path \$APPDIR${sep}..${sep}fx --add-modules javafx.controls",
+        '--java-options', "-Dnotebookai.models=\$APPDIR${sep}..${sep}models",
+        '--dest', new File(base, 'out').path, '--temp', new File(base, 'work').path,
+        '--vendor', pub.name, '--description', APP_DESCRIPTION, '--license-file', new File(base, 'content/legal/LICENSE').path]
+    if (lic) { c += ['--copyright', lic.replace('Copyright', '').trim()] }
+    c
+}
+
+def maybeSign = { File artifact, Map meta, File metaFile ->
+    String tmpl = project.findProperty('signCommand')
+    if (!tmpl) { return }
+    List<String> cmd = tmpl.split(' ').collect { it.replace('{file}', artifact.path).toString() }
+    runTool(cmd)     // credentials come from the environment/tool configuration, never from this repository
+    meta.signing = [signed: true, tool: cmd[0], note: 'signed by an external step configured through -PsignCommand']
+}
+
+tasks.named('verifyDistLinux') { mustRunAfter 'distLinux' }
+tasks.named('verifyDistWindows') { mustRunAfter 'distWindows' }
+
+// ===================================== Linux: .deb =====================================
+tasks.register('packageDeb') {
+    group = 'distribution'
+    description = 'Builds release-output/notebook-ai_<ver>_amd64.deb with jpackage (Debian/Ubuntu x86-64 host only).'
+    dependsOn 'distLinux', 'verifyDistLinux'
+    outputs.upToDateWhen { false }
+    doLast {
+        requireHost('linux'); requireNotPrivileged()
+        List<String> missing = ['dpkg-deb', 'fakeroot', 'ldd'].findAll { which(it) == null }
+        if (missing) { throw new GradleException("Missing host tools for jpackage .deb: ${missing.join(', ')}. Install them yourself (this build never installs host packages), e.g.: sudo apt-get install dpkg-dev fakeroot binutils") }
+        def spec = [os: 'linux', dir: 'linux-dist']
+        File root = rootProject.projectDir
+        File base = stageNativeInput('Linux', spec, 'linux-dist')
+        List<String> inputProblems = validateNativeInput(base, spec)
+        if (inputProblems) { throw new GradleException("jpackage input failed validation:\n  - " + inputProblems.join('\n  - ')) }
+        def jdk = buildRuntime('linux')
+        String debVersion = project.version.toString()
+        Map meta = writeNativeMeta('linux', spec, jdk, new File(base, 'content/legal'), debVersion)
+        def pub = publisher()
+        List<String> cmd = jpackageCommon('linux', base, jdk, 'deb') + ['--linux-package-name', APP_NAME, '--linux-deb-maintainer', pub.maintainer,
+            '--linux-app-category', 'graphics', '--linux-menu-group', 'Graphics;Office', '--linux-shortcut', '--linux-package-deps', DEB_FX_DEPENDS]
+        runTool(cmd)
+        File raw = new File(base, 'out').listFiles().find { it.name.endsWith('.deb') }
+        if (raw == null) { throw new GradleException('jpackage produced no .deb') }
+
+        // Repack: add what a Debian package should own (the /usr/bin command and a copyright file). Still the jpackage package.
+        File rp = new File(base, 'repack'); if (rp.exists()) { rp.deleteDir() }
+        runTool(['dpkg-deb', '-R', raw.path, rp.path])
+        File bin = new File(rp, 'usr/bin'); bin.mkdirs()
+        Files.createSymbolicLink(new File(bin, 'notebook-ai').toPath(), Paths.get('/opt/notebook-ai/bin/notebook-ai'))
+        File doc = new File(rp, 'usr/share/doc/notebook-ai'); doc.mkdirs()
+        String cp = new File(root, 'LICENSE').readLines().find { it.startsWith('Copyright') } ?: 'Copyright (c) the Notebook-AI authors'
+        new File(doc, 'copyright').text = """Notebook-AI ${project.version}
+${cp}
+Licensed under the BSD 3-Clause License; the full text is in /opt/notebook-ai/lib/legal/LICENSE.
+
+This package bundles third-party software (a Java runtime, JavaFX, ONNX Runtime, metadata-extractor, xmpcore) and
+PaddleOCR PP-OCRv6 models, each under its own license. Texts and notices: /opt/notebook-ai/lib/legal/
+(THIRD-PARTY-NOTICES.txt, licenses/, native-package.json). The Java runtime's own license files are in /opt/notebook-ai/lib/runtime/legal/.
+
+LICENSE STATUS (machine-readable: /opt/notebook-ai/lib/legal/licenses/licensing-status.json):
+Unresolved or partial redistribution evidence at build time: ${meta.licensing.unresolvedBlocking ? meta.licensing.unresolvedBlocking.join(', ') : 'none'}.
+Internal build: ${meta.internalBuild}${meta.internalBuildReasons ? ' (' + meta.internalBuildReasons.join('; ') + ')' : ''}.
+"""
+        // postinst: add a READ-ONLY notice when another notebook-ai command could shadow /usr/bin/notebook-ai (nothing is modified)
+        File pi = new File(rp, 'DEBIAN/postinst')
+        String pit = pi.text
+        String notice = '''    configure)
+for nbai_c in "${DPKG_ROOT:-}/usr/local/bin/notebook-ai" "${DPKG_ROOT:-}"/home/*/.local/bin/notebook-ai; do
+  if [ -e "$nbai_c" ]; then echo "notebook-ai: NOTE: ${nbai_c#${DPKG_ROOT:-}} exists and may shadow /usr/bin/notebook-ai (it is not modified). Check with: command -v notebook-ai" >&2; fi
+done
+'''
+        if (!pit.contains('    configure)\n')) { throw new GradleException('jpackage postinst has an unexpected shape; cannot add the shadowing notice') }
+        pi.text = pit.replaceFirst('    configure\\)\n', java.util.regex.Matcher.quoteReplacement(notice))
+        // Desktop-menu registration is cosmetic: it must never abort an install or (worse) block a removal on a system that has no
+        // desktop/menu directories (servers, containers). jpackage's scripts run it under 'set -e'; make both calls non-fatal.
+        pi.text = pi.text.replaceAll(/(xdg-desktop-menu install [^\n]*)/, '$1 || echo "notebook-ai: note: the desktop menu entry could not be registered (no desktop menu directory); the application and the notebook-ai command are installed" >&2')
+        File pr = new File(rp, 'DEBIAN/prerm')
+        pr.text = pr.text.replaceAll(/(xdg-desktop-menu uninstall [^\n]*)/, '$1 || true')
+        // control: refresh Installed-Size; md5sums: regenerate over every regular file
+        List<File> files = []; rp.eachFileRecurse(groovy.io.FileType.FILES) { f -> if (!f.path.startsWith(new File(rp, 'DEBIAN').path + File.separator) && !Files.isSymbolicLink(f.toPath())) { files << f } }
+        long kib = (long) Math.ceil(files.sum { it.length() } / 1024.0)
+        File ctl = new File(rp, 'DEBIAN/control')
+        String ct = ctl.text
+        ct = ct =~ /(?m)^Installed-Size:.*\n/ ? ct.replaceFirst(/(?m)^Installed-Size:.*\n/, "Installed-Size: ${kib}\n") : ct.replaceFirst(/(?m)^(Architecture:.*\n)/, "\$1Installed-Size: ${kib}\n")
+        ctl.text = ct
+        new File(rp, 'DEBIAN/md5sums').text = files.sort { it.path }.collect { f ->
+            def md = java.security.MessageDigest.getInstance('MD5'); f.withInputStream { is -> byte[] b = new byte[65536]; int n; while ((n = is.read(b)) > 0) { md.update(b, 0, n) } }
+            md.digest().collect { String.format('%02x', it & 0xff) }.join() + '  ' + rp.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+        }.join('\n') + '\n'
+        File finalDir = new File(root, 'release-output'); finalDir.mkdirs()
+        File built = new File(base, 'out/final.deb')
+        runTool(['dpkg-deb', '--root-owner-group', '-b', rp.path, built.path])
+        String ver = runTool(['dpkg-deb', '-f', built.path, 'Version']).trim()
+        File target = new File(finalDir, "notebook-ai_${ver}_amd64.deb")
+        if (target.exists()) { target.delete() }
+        built.renameTo(target)
+        File metaFile = new File(base, 'content/legal/native-package.json')
+        maybeSign(target, meta, metaFile)
+        new File(finalDir, target.name + '.sha256').text = sha(target) + '  ' + target.name + '\n'
+        println "Built ${target}  (${target.length()} bytes)${meta.internalBuild ? '  [INTERNAL BUILD: ' + meta.internalBuildReasons.join('; ') + ']' : ''}"
+    }
+    finalizedBy 'verifyDeb'
+}
+
+tasks.register('verifyDeb') {
+    group = 'verification'
+    description = 'Validates the built .deb: metadata, contents, platform natives, runtime, models, no developer paths, md5sums.'
+    outputs.upToDateWhen { false }
+    doLast {
+        requireHost('linux')
+        File out = new File(rootProject.projectDir, 'release-output')
+        File deb = out.listFiles()?.find { it.name ==~ /notebook-ai_.+_amd64\.deb/ }
+        if (deb == null) { throw new GradleException('no notebook-ai_*_amd64.deb in release-output/; run ./gradlew packageDeb') }
+        List<String> problems = []
+        def bad = { String m -> problems << m }
+        def field = { String f -> runTool(['dpkg-deb', '-f', deb.path, f]).trim() }
+        String ver = project.version.toString()
+        if (field('Package') != 'notebook-ai') { bad('Package != notebook-ai') }
+        if (field('Version') != ver) { bad("Version ${field('Version')} != ${ver}") }
+        if (field('Architecture') != 'amd64') { bad('Architecture != amd64') }
+        if (!field('Maintainer')) { bad('Maintainer missing') }
+        String deps = field('Depends')
+        ['libgtk-3-0', 'libc6', 'libgl1'].each { d -> if (!deps.contains(d)) { bad("Depends lacks ${d}: ${deps}") } }
+        if (deps.contains('openjdk') || deps.contains('default-jre') || deps.contains('java')) { bad('package depends on an external Java: ' + deps) }
+        String listing = runTool(['dpkg-deb', '-c', deb.path])
+        List<String> paths = listing.readLines().collect { l -> l.split(/\s+/, 6)[5] }
+        def has = { String p -> paths.any { it == p || it.startsWith(p + ' ->') } }
+        ['./opt/notebook-ai/bin/notebook-ai', './opt/notebook-ai/lib/runtime/bin/java', './opt/notebook-ai/lib/runtime/legal/', './opt/notebook-ai/lib/legal/THIRD-PARTY-NOTICES.txt',
+         './opt/notebook-ai/lib/legal/native-package.json', './opt/notebook-ai/lib/legal/licenses/licensing-status.json', './opt/notebook-ai/lib/legal/licenses/onnxruntime/LICENSE',
+         './opt/notebook-ai/lib/models/det.onnx', './opt/notebook-ai/lib/models/rec.onnx', './opt/notebook-ai/lib/models/checksums.sha256',
+         './usr/bin/notebook-ai', './usr/share/doc/notebook-ai/copyright'].each { p -> if (!has(p)) { bad("missing from package: ${p}") } }
+        if (!paths.any { it.startsWith('./usr/bin/notebook-ai -> /opt/notebook-ai/bin/notebook-ai') }) { bad('/usr/bin/notebook-ai is not a symlink to /opt/notebook-ai/bin/notebook-ai') }
+        if (!paths.any { it.endsWith('.desktop') }) { bad('no desktop entry') }
+        File maint = new File(rootProject.projectDir, 'build/native/verify-deb-ctl'); if (maint.exists()) { maint.deleteDir() }; maint.mkdirs()
+        runTool(['dpkg-deb', '-e', deb.path, maint.path])
+        String postinst = new File(maint, 'postinst').text
+        if (!postinst.contains('xdg-desktop-menu install') || !postinst.contains('may shadow')) { bad('postinst lacks the desktop-menu step or the shadowing notice') }
+        if (!(postinst =~ /xdg-desktop-menu install [^\n]*\|\| echo/).find()) { bad('postinst: the desktop-menu registration must be non-fatal') }
+        if (!(new File(maint, 'prerm').text =~ /xdg-desktop-menu uninstall [^\n]*\|\| true/).find()) { bad('prerm: the desktop-menu unregistration must be non-fatal (a failing prerm blocks removal)') }
+        ['curl', 'wget', 'gradle', '.bashrc', '.profile', '.zshrc', 'sudo ', 'java -', 'apt-get'].each { w -> maint.listFiles().each { f -> if (f.name in ['preinst', 'postinst', 'prerm', 'postrm'] && f.text.contains(w)) { bad("maintainer script ${f.name} contains '${w}'") } } }
+        maint.deleteDir()
+        if (paths.count { it.contains('/lib/fx/javafx-') && it.endsWith('-linux.jar') } != 3) { bad('expected exactly 3 Linux JavaFX jars') }
+        paths.findAll { it =~ /(-win\.jar|\.dll|\.dylib|\.exe|\.nbai|\.zip|\.deb|\.git\/|\/src\/|linux-dist|win-dist|release-output|eval-local|__pycache__)/ }.each { bad("unexpected path in package: ${it}") }
+        if (paths.count { it.startsWith('./opt/notebook-ai/lib/app/') && it.endsWith('.jar') } != 4) { bad('expected exactly 4 application jars in lib/app') }
+        // extract and inspect
+        File x = new File(rootProject.projectDir, 'build/native/verify-deb'); if (x.exists()) { x.deleteDir() }; x.mkdirs()
+        runTool(['dpkg-deb', '-x', deb.path, x.path]); runTool(['dpkg-deb', '-e', deb.path, new File(x, 'DEBIAN').path])
+        File ort = new File(x, 'opt/notebook-ai/lib/app/onnxruntime-1.22.0.jar')
+        if (ort.isFile()) {
+            Set<String> nat = new TreeSet<>(); def zf = new java.util.zip.ZipFile(ort)
+            try { zf.entries().each { e -> def m = (e.name =~ /^ai\/onnxruntime\/native\/([^\/]+)\//); if (m.find()) { nat << m.group(1) } } } finally { zf.close() }
+            if (nat != ['linux-x64'] as Set) { bad("ONNX Runtime natives are ${nat}, expected [linux-x64]") }
+        } else { bad('onnxruntime jar missing') }
+        Map want = [:]; new File(x, 'opt/notebook-ai/lib/models/checksums.sha256').eachLine { l -> def m = (l =~ /^([0-9a-f]{64})\s+(\S+)$/); if (m.find()) { want[m.group(2)] = m.group(1) } }
+        ['det.onnx', 'det.yml', 'rec.onnx', 'rec.yml'].each { n -> if (sha(new File(x, 'opt/notebook-ai/lib/models/' + n)) != want[n]) { bad("model checksum mismatch: ${n}") } }
+        String cfg = new File(x, 'opt/notebook-ai/lib/app/notebook-ai.cfg').text
+        if (cfg.contains('javafx') && cfg =~ /app\.classpath=.*javafx/) { bad('JavaFX jars on the classpath (second copy)') }
+        if (!cfg.contains('--module-path') || !cfg.contains('javafx.controls') || !cfg.contains('-Dnotebookai.models=')) { bad('launcher configuration lacks module path / models property') }
+        List<String> needles = [rootProject.projectDir.absolutePath, System.getProperty('user.home'), gradle.gradleUserHomeDir.absolutePath].findAll { it && it.length() > 4 }
+        x.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            if (f.path.contains('/runtime/') && !f.name.endsWith('.cfg')) { return }
+            if (!(f.name ==~ /.*\.(cfg|desktop|json|txt|sh|xml)$/ || f.name in ['control', 'postinst', 'prerm', 'postrm', 'copyright'])) { return }
+            String t = f.getText('ISO-8859-1'); needles.each { n -> if (t.contains(n)) { bad("developer-machine path ${n} embedded in ${x.toPath().relativize(f.toPath())}") } }
+        }
+        def nm = new groovy.json.JsonSlurper().parse(new File(x, 'opt/notebook-ai/lib/legal/native-package.json'))
+        if (nm.application.version != ver || nm.target.os != 'linux' || nm.runtime.bundled != true) { bad('native-package.json does not match the package') }
+        if (nm.licensing.unresolvedBlocking && !nm.internalBuild) { bad('unresolved licensing but not flagged as an internal build') }
+        if (nm.signing.signed != false && !project.hasProperty('signCommand')) { bad('signing state inconsistent') }
+        // md5sums
+        new File(x, 'DEBIAN/md5sums').eachLine { l -> def m = (l =~ /^([0-9a-f]{32})  (.+)$/); if (m.find()) { File f = new File(x, m.group(2)); if (!Files.isSymbolicLink(f.toPath()) && f.isFile()) {
+            def md = java.security.MessageDigest.getInstance('MD5'); f.withInputStream { is -> byte[] b = new byte[65536]; int n; while ((n = is.read(b)) > 0) { md.update(b, 0, n) } }
+            if (md.digest().collect { String.format('%02x', it & 0xff) }.join() != m.group(1)) { bad("md5sum mismatch ${m.group(2)}") } } } }
+        x.deleteDir()
+        if (problems) { throw new GradleException("${deb.name} failed validation:\n  - " + problems.join('\n  - ')) }
+        println "${deb.name}: valid"
+    }
+}
+
+// ===================================== Windows: .exe =====================================
+tasks.register('packageExe') {
+    group = 'distribution'
+    description = 'Builds release-output/notebook-ai-<ver>-windows-x64-setup.exe with jpackage + WiX 3.x (Windows x64 host only).'
+    dependsOn 'distWindows', 'verifyDistWindows'
+    outputs.upToDateWhen { false }
+    doLast {
+        requireHost('windows')
+        // JDK 21's jpackage supports WiX Toolset 3.x only (WiX 4/5 support arrived in JDK 24).
+        File candle = which('candle.exe'); File light = which('light.exe')
+        if (candle == null || light == null) { throw new GradleException('WiX Toolset 3.x (candle.exe, light.exe) was not found on PATH. JDK 21 jpackage needs WiX 3.x (3.14.1 recommended); WiX 4/5 are NOT supported by JDK 21. Install it yourself and add its bin directory to PATH.') }
+        String wv = runTool([candle.path, '-?']).readLines().find { it.toLowerCase().contains('version') } ?: ''
+        if (!(wv =~ /version\s+3\./).find()) { throw new GradleException("WiX 3.x is required for JDK 21 jpackage; found: ${wv}") }
+        def spec = [os: 'windows', dir: 'win-dist']
+        File root = rootProject.projectDir
+        File base = stageNativeInput('Windows', spec, 'win-dist')
+        List<String> inputProblems = validateNativeInput(base, spec)
+        if (inputProblems) { throw new GradleException("jpackage input failed validation:\n  - " + inputProblems.join('\n  - ')) }
+        def jdk = buildRuntime('windows')
+        Map meta = writeNativeMeta('windows', spec, jdk, new File(base, 'content/legal'), project.version.toString())
+        // second launcher with a console, so `notebook-ai-cli --self-check` prints output and returns an exit status
+        File cliProps = new File(base, 'work/notebook-ai-cli.properties'); cliProps.text = 'win-console=true\n'
+        List<String> cmd = jpackageCommon('windows', base, jdk, 'exe') + ['--win-per-user-install', '--win-menu', '--win-menu-group', 'Notebook-AI', '--win-shortcut', '--win-shortcut-prompt',
+            '--win-dir-chooser', '--win-upgrade-uuid', WIN_UPGRADE_UUID, '--add-launcher', "notebook-ai-cli=${cliProps.path}"]
+        runTool(cmd)
+        File raw = new File(base, 'out').listFiles().find { it.name.endsWith('.exe') }
+        if (raw == null) { throw new GradleException('jpackage produced no .exe') }
+        File finalDir = new File(root, 'release-output'); finalDir.mkdirs()
+        File target = new File(finalDir, "notebook-ai-${project.version}-windows-x64-setup.exe")
+        if (target.exists()) { target.delete() }
+        java.nio.file.Files.move(raw.toPath(), target.toPath())
+        maybeSign(target, meta, new File(base, 'content/legal/native-package.json'))
+        new File(finalDir, target.name + '.sha256').text = sha(target) + '  ' + target.name + '\n'
+        if (target.length() < 30L * 1024 * 1024) { throw new GradleException("the installer is implausibly small (${target.length()} bytes)") }
+        println "Built ${target}  (${target.length()} bytes)${meta.internalBuild ? '  [INTERNAL BUILD: ' + meta.internalBuildReasons.join('; ') + ']' : ''}"
+    }
+}
+
+tasks.register('packageNative') {
+    group = 'distribution'
+    description = "Builds the native installer for THIS host (.deb on Linux, .exe on Windows); other hosts fail early."
+    if (onLinux) { dependsOn 'packageDeb' } else if (onWindows) { dependsOn 'packageExe' }
+    doLast { if (!onLinux && !onWindows) { throw new GradleException("No native installer type for host '${hostOs}'. Supported: Linux x86-64 (.deb), Windows x64 (.exe).") } }
+}
+
+// Host-independent static check of the WINDOWS jpackage input (what packageExe would feed jpackage). It does NOT build or run anything Windows.
+tasks.register('checkNativeInputWindows') {
+    group = 'verification'
+    description = 'Stages and validates the Windows jpackage input from win-dist on any host (no jpackage, no installer).'
+    dependsOn 'distWindows', 'verifyDistWindows'
+    outputs.upToDateWhen { false }
+    doLast {
+        def spec = [os: 'windows', dir: 'win-dist']
+        File base = stageNativeInput('Windows', spec, 'win-dist')
+        List<String> problems = validateNativeInput(base, spec)
+        if (problems) { throw new GradleException("Windows jpackage input failed validation:\n  - " + problems.join('\n  - ')) }
+        println "Windows jpackage input is valid (${relList(new File(base, 'input')).size()} jars, ${relList(new File(base, 'content')).size()} content files). Nothing was built."
+    }
+}

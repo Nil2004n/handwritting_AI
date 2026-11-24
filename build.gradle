@@ -260,12 +260,9 @@ final String DIST_GENERATOR = 'notebook-ai gradle dist'
 final int DIST_FORMAT = 1
 final String ORT_JAR = 'onnxruntime-1.22.0.jar'
 final List<String> MODEL_FILES = ['det.onnx', 'det.yml', 'rec.onnx', 'rec.yml']
-final List<String> LICENSING_GAPS = [
-    'ONNX Runtime 1.22.0: its own LICENSE text could not be obtained (declared MIT); the jar ships ThirdPartyNotices.txt, which is included',
-    'xmpcore 6.1.11 (transitive): BSD-3-Clause per its POM; no copyright notice text available',
-    'OpenJFX license texts are from a jfx21u repository snapshot (commit dd5bd597dc16...), not from the 21.0.7 release tag',
-    'PP-OCRv6 models: Apache-2.0 declared via model-repository metadata only (no LICENSE file in those repositories)',
-]
+// Third-party license evidence: ONE hand-maintained file; notices, distribution.json and the release gate all derive from it.
+def licensingItems = { -> new groovy.json.JsonSlurper().parse(new File(rootProject.projectDir, 'packaging/licensing-status.json')).items as List }
+def licensingGapsOf = { -> licensingItems().findAll { it.status != 'resolved' }.collect { "${it.component} ${it.version}: ${it.status} - ${it.evidence}".toString() } }
 
 def sha256Of = { File f ->
     def md = java.security.MessageDigest.getInstance('SHA-256')
@@ -310,7 +307,7 @@ def validateDist = { File dir, Map spec ->
     boolean win = spec.os == 'windows'
     List<String> required = ['distribution.json', 'SHA256SUMS', 'README.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'app/PLATFORM',
         'app/lib/notebook-ai-' + project.version + '.jar', 'app/models/checksums.sha256', 'licenses/Apache-2.0.txt', 'licenses/PROVENANCE.txt',
-        'licenses/openjfx/LICENSE', 'licenses/onnxruntime-ThirdPartyNotices.txt', 'licenses/PaddleOCR-LICENSE'] +
+        'licenses/openjfx/LICENSE', 'licenses/onnxruntime-ThirdPartyNotices.txt', 'licenses/onnxruntime/LICENSE', 'licenses/licensing-status.json', 'licenses/PaddleOCR-LICENSE'] +
         MODEL_FILES.collect { 'app/models/' + it } +
         (win ? ['install.cmd', 'uninstall.cmd', 'run-notebook-ai.cmd', 'app/bin/notebook-ai.bat', 'scripts/install-windows.ps1', 'scripts/launcher-body.cmd']
              : ['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai', 'scripts/launcher-body.sh'])
@@ -459,6 +456,11 @@ distSpecs.each { String tname, Map spec ->
             new File(lic, 'Apache-2.0.txt').bytes = new File(pk, 'legal/Apache-2.0.txt').bytes
             new File(lic, 'PROVENANCE.txt').bytes = new File(pk, 'legal/PROVENANCE.txt').bytes
             new File(lic, 'PaddleOCR-LICENSE').bytes = new File(root, 'third-party/PaddleOCR-LICENSE').bytes
+            new File(lic, 'licensing-status.json').bytes = new File(pk, 'licensing-status.json').bytes
+            new File(lic, 'onnxruntime').mkdirs()
+            new File(lic, 'onnxruntime/LICENSE').bytes = new File(pk, 'legal/onnxruntime/LICENSE').bytes
+            new File(lic, 'models').mkdirs()
+            new File(pk, 'legal/models').listFiles().findAll { it.isFile() }.each { new File(lic, 'models/' + it.name).bytes = it.bytes }
             new File(lic, 'openjfx').mkdirs()
             new File(pk, 'legal/openjfx').listFiles().findAll { it.isFile() }.each { new File(lic, 'openjfx/' + it.name).bytes = it.bytes }
             def zf = new java.util.zip.ZipFile(trimmedOrt)
@@ -475,7 +477,8 @@ distSpecs.each { String tname, Map spec ->
             String porcelain = runGit(['status', '--porcelain'])
             boolean dirty = porcelain == null ? true : !porcelain.isEmpty()
             String dirtyText = dirty ? 'WORKING TREE HAD UNCOMMITTED CHANGES' : 'clean working tree'
-            Closure fill = { String t -> t.replace('@VERSION@', ver).replace('@ARCH@', spec.arch).replace('@PLATFORM@', spec.platform)
+            String statusText = licensingItems().collect { i -> "- ${i.component} ${i.version} [${i.declaredLicense}]: ${i.status.toString().toUpperCase()}\n    ${i.evidence}" + (i.releaseImpact ? "\n    Release impact: ${i.releaseImpact}" : '') }.join('\n')
+            Closure fill = { String t -> t.replace('@LICENSE_STATUS@', statusText).replace('@VERSION@', ver).replace('@ARCH@', spec.arch).replace('@PLATFORM@', spec.platform)
                 .replace('@JFX@', spec.cls).replace('@ORT@', spec.ort).replace('@COMMIT@', commit.take(12)).replace('@DIRTY@', dirtyText) }
             if (win) {
                 new File(stg, 'install.cmd').bytes = asCrlf(new File(root, 'install.cmd'))
@@ -519,7 +522,8 @@ distSpecs.each { String tname, Map spec ->
                 models: [bundled: true, identity: 'PP-OCRv6_small (PaddleOCR detector + recognizer, ONNX)', files: modelMeta,
                          license: 'Apache-2.0 (declared by the model repositories)',
                          upstream: [[repo: 'PaddlePaddle/PP-OCRv6_small_det_onnx', commit: pins['DET']], [repo: 'PaddlePaddle/PP-OCRv6_small_rec_onnx', commit: pins['REC']]]],
-                licensingGaps: LICENSING_GAPS,
+                licensingGaps: licensingGapsOf(),
+                licensing: [statusFile: 'licenses/licensing-status.json', unresolvedBlocking: licensingItems().findAll { it.releaseBlocking && it.status != 'resolved' }.collect { it.id }],
                 reproducibleBuild: 'not claimed',
             ]
             new File(stg, 'distribution.json').text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(meta)) + '\n'
@@ -628,3 +632,21 @@ tasks.register('cleanDist') {
         }
     }
 }
+
+// Public-release gate: fails while any release-blocking third-party license item is not 'resolved'.
+// Internal/test builds do not run it; every artifact still records the unresolved items (distribution.json "licensing").
+tasks.register('verifyReleaseLicensing') {
+    group = 'verification'
+    description = 'FAILS while redistribution license evidence is unresolved (see packaging/licensing-status.json).'
+    doLast {
+        def blocking = licensingItems().findAll { it.releaseBlocking && it.status != 'resolved' }
+        if (blocking) {
+            throw new GradleException("Public release blocked by unresolved license evidence:\n  - " +
+                blocking.collect { "${it.id} (${it.component} ${it.version}): ${it.status}. ${it.releaseImpact ?: it.evidence}" }.join('\n  - ') +
+                "\nThis is a gate, not a formality: internal/test builds are still possible, but must not be published.")
+        }
+        println 'All release-blocking license items are resolved.'
+    }
+}
+
+apply from: "gradle/native-installers.gradle"

@@ -1,0 +1,59 @@
+# Builds and tests the NATIVE installers (jpackage): notebook-ai_<ver>_amd64.deb on Ubuntu and the Windows EXE on Windows.
+# These jobs run on disposable GitHub-hosted runners. They have NOT been run by the maintainers (no CI run, no Windows machine).
+# Packages built here are INTERNAL builds while packaging/licensing-status.json has unresolved items; nothing is published.
+name: native-installers
+on:
+  workflow_dispatch:
+  push:
+    paths: ['gradle/native-installers.gradle', 'packaging/**', 'tools/test-deb*', 'tools/test-installer-windows.ps1', '.github/workflows/native-installers.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.7+6'     # a GA Temurin 21 JDK (with jmods): the explicitly identified bundled-runtime source
+      - name: Packaging prerequisites
+        run: sudo apt-get update && sudo apt-get install -y fakeroot binutils dpkg-dev xvfb xdotool xfwm4 python3-pil lintian
+      - run: make models
+      - name: Build the .deb (jpackage)
+        run: ./gradlew packageDeb
+      - name: Package tests (static, extracted payload, private-root dpkg)
+        run: sh tools/test-deb.sh
+      - name: Lifecycle with apt on this disposable runner
+        run: sudo NBAI_DISPOSABLE_ENV=1 sh tools/test-deb-lifecycle.sh release-output/notebook-ai_*_amd64.deb
+      - name: Public-release gate (EXPECTED to fail while license evidence is unresolved)
+        run: ./gradlew verifyReleaseLicensing
+        continue-on-error: true
+
+  windows-exe:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.7+6'
+      - name: WiX Toolset 3.x (JDK 21 jpackage does not support WiX 4/5)
+        shell: powershell
+        run: |
+          choco install wixtoolset --version=3.14.1 -y --no-progress
+          $wix = Get-ChildItem 'C:\Program Files (x86)' -Filter 'WiX Toolset v3*' | Select-Object -First 1
+          Add-Content $env:GITHUB_PATH (Join-Path $wix.FullName 'bin')
+      - name: Models
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
+      - name: Build the EXE (jpackage)
+        shell: cmd
+        run: gradlew.bat packageExe
+      - name: Installer lifecycle on this disposable runner
+        shell: powershell
+        run: |
+          $env:NBAI_DISPOSABLE_ENV = '1'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1
