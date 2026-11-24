@@ -6,14 +6,20 @@ Where something has **not** been tested it is marked **(untested)**. The honest 
 | | Linux x86-64 | Windows x64 |
 |---|---|---|
 | Distribution builds | tested | tested (cross-staged on Linux; real Windows build untested) |
-| Installer logic | tested (`tools/verify-install.sh`, 145 checks) | logic tested under PowerShell **on Linux** (114 checks); cmd.exe/registry/file-locking **not tested** |
+| Installer logic | tested (`tools/verify-install.sh`, 156 checks) | logic tested under PowerShell **on Linux** (114 checks); cmd.exe/registry/file-locking **not tested** |
 | The application itself | tested | **never run on Windows** |
 | Per-user install, no sudo/Admin | yes | yes |
 | System-wide install | `sudo sh install.sh --prefix /usr/local` (copy only; **untested**) | not provided |
 
 ---
 
+> **Recipients of a release archive** (`notebook-ai-<version>-linux-x64.zip` / `-windows-x64.zip`): you do not need anything from this repository. Extract the archive, open its `README.txt`, and
+> run `./install.sh` (Linux) or `install.cmd --add-to-path` (Windows); or run `./run-notebook-ai.sh` / `run-notebook-ai.cmd` without installing. You must install a **Java 21+ runtime** yourself. The rest of
+> this guide is for people building from source; the archive-specific parts are in [§0](#0-release-archives).
+
 ## Contents
+
+0. [Release archives (no source needed)](#0-release-archives)
 
 1. [Concepts: build, models, install are separate steps](#1-concepts)
 2. [Prerequisites](#2-prerequisites)
@@ -33,6 +39,26 @@ Where something has **not** been tested it is marked **(untested)**. The honest 
 16. [Running without installing, headless, offline](#16-running-without-installing-headless-offline)
 17. [Supported platforms matrix](#17-supported-platforms-matrix)
 18. [Troubleshooting](#18-troubleshooting)
+
+---
+
+## 0. Release archives
+
+Built by maintainers with `make dist package` (see `README.md`, "Release distributions"). A recipient:
+
+| Step | Linux | Windows |
+|---|---|---|
+| Verify the archive | `sha256sum -c notebook-ai-<v>-linux-x64.zip.sha256` | `certutil -hashfile <zip> SHA256` and compare with the `.sha256` file |
+| Extract | any tool; if the exec bits were dropped: `chmod +x install.sh uninstall.sh run-notebook-ai.sh app/bin/notebook-ai` | right-click > Extract All (not from inside the ZIP viewer) |
+| Run in place | `./run-notebook-ai.sh` (`--self-check` = headless test) | `run-notebook-ai.cmd` (`--self-check`) |
+| Install for the user | `./install.sh` | `install.cmd --add-to-path` |
+| Upgrade | extract the new archive, run its installer again | same (close the running app first) |
+| Uninstall | `./uninstall.sh` (same options as the install) | `uninstall.cmd` |
+
+The installers verify `SHA256SUMS` before installing, refuse a distribution for another OS/architecture, never build or download, and install the license documents under `<app>/legal/`.
+The installed command does not depend on the extracted folder. Models are **bundled** (offline after extraction). **Java 21+ is not bundled.** The Windows archive has not been executed on Windows by the maintainers.
+Maintainer details: generated into `linux-dist/` / `win-dist/` by `make dist-linux` / `make dist-windows` (or `./gradlew distLinux distWindows`), validated, then archived by `make package`;
+`tools/test-dist.sh`, `tools/test-dist-build.sh` and `tools/test-dist-windows.ps1` test them; `./gradlew cleanDist` removes only generated output.
 
 ---
 

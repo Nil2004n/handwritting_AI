@@ -858,3 +858,35 @@ Verified (under PowerShell on Linux): option parsing and exit codes, path valida
 - Run `.github/workflows/installers.yml` (or the Windows suite by hand) on real Windows; then launch the installed app and repeat a GUI smoke test there.
 - `sudo sh install.sh --prefix /usr/local` was not exercised (no sudo allowed).
 - Pre-existing old-layout installations on the development machine were deliberately left untouched; the per-user default installs alongside them and reports them.
+
+## Release staging directories linux-dist/ and win-dist/ (2026-11-24)
+Starting checkpoint verified: `main` at `bb60a79`, 4 commits ahead of `origin/main` (`abfc7ff`), clean tree. Nothing pushed, tagged or published.
+
+### Findings that shaped the design
+- The installed tree was 172 MB because the ONNX Runtime jar (133 MB) bundles natives for **every** OS; a "target-platform only" distribution therefore requires repackaging that jar (done; Linux dist 47 MB, Windows 111 MB).
+- The JavaFX 21.0.7 Maven jars contain **no license text**; ONNX Runtime's jar ships only `ThirdPartyNotices.txt`; xmpcore ships nothing. OpenJFX legal files were fetched once from the `openjdk/jfx21u` repository (commit `dd5bd597...`) and committed under `packaging/legal/` with provenance.
+- Models: Apache-2.0 per the model repositories' metadata (no LICENSE file in them) + upstream PaddleOCR license in `third-party/`; bundled, with the basis recorded as a known gap.
+- No JRE is bundled and no existing runtime-packaging implementation exists; Java 21+ is a documented prerequisite.
+- Gradle's generated start script needs `xargs` (found by a minimal-PATH test); documented.
+
+### What was implemented
+- Gradle: per-target configurations (Linux/Windows resolved side by side), `trimOnnxRuntime<T>`, `startScripts<T>`, `dist<T>`/`dist`, `verifyDist<T>`/`verifyDist`, `package<T>`/`package` (ZIP in `release-output/` + `.sha256`), `cleanDist`. Staged in `build/dist-staging/`, validated, then swapped in;
+  an existing directory without our `distribution.json`, or with unlisted files, is never touched. Line endings normalised during staging. Default build unchanged.
+- Installers: packaged mode (SHA256SUMS verified first, platform from `distribution.json`, only `bin lib PLATFORM` copied, legal documents to `<app>/legal/`, `--build` refused). Shared launcher bodies `packaging/launcher-body.{sh,cmd}` now drive the installed command AND `run-notebook-ai.*` (previously the logic was embedded in the installers).
+- `notebook-ai --self-check` (headless; Java, JavaFX modules, ONNX natives, models) in `Main`; this is the only application-code change (OCR code, models and defaults untouched).
+- Make targets: `dist-linux dist-windows dist verify-dist package package-linux package-windows dist-clean test-dist` (thin dispatch; root guard applies).
+- Generated content: `distribution.json`, `SHA256SUMS`, `README.txt`, `THIRD-PARTY-NOTICES.txt`, `licenses/`.
+- Tests: `tools/test-dist.sh` (50), `tools/test-dist-build.sh` (16), `tools/test-dist-windows.ps1` (34 + 5 Windows-only SKIPs), `tools/verify-install.sh` extended (156), CI workflow extended (not run).
+
+### Defects found by the new checks and fixed
+1. The validator rejected `install.sh` for its relative source-checkout fallback string -> build-directory needles now apply outside the three dual-mode installer files (absolute developer paths are forbidden everywhere).
+2. `packaging/uninstall.cmd` had LF endings in the working copy -> staging normalises CRLF/LF instead of trusting the checkout.
+3. Test-environment findings: `xargs` prerequisite; a UTF-8 locale is needed for the window title (`LANG=C.UTF-8` in the GUI test; under a bare C locale the X window is named `java`, cosmetic).
+
+### Licensing / shipping blockers (explicit)
+- ONNX Runtime LICENSE (MIT) text not obtained. xmpcore BSD-3 copyright notice not obtained. OpenJFX texts are from a branch snapshot, not the 21.0.7 tag. Model licensing relies on repository metadata. **No distribution is called ready to ship until these are resolved or consciously accepted.**
+- The Windows distribution has been assembled, statically verified and its packaged-mode PowerShell installer logic exercised under pwsh on Linux; cmd.exe, `run-notebook-ai.cmd`, registry PATH and the application on Windows were **never executed**.
+
+### Verified on the Linux host
+Generation of both directories and archives; archive structure (single top-level directory, exec bits, normalised timestamps); extraction into a path with spaces; SHA256SUMS; metadata vs payload; no embedded developer paths; headless `--self-check` from the extracted archive and from the installed copy; real OCR through the installed trimmed ONNX Runtime; GUI window launched from the extracted archive under a private Xvfb display;
+install, deletion of the extracted folder, upgrade, uninstall, tamper refusal; generator safeguards incl. mutation checks. Re-packaging an unchanged directory produced identical bytes once; reproducible builds are not claimed.

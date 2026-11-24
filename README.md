@@ -33,7 +33,7 @@ at runtime** — your images and text never leave your machine.
 6. [Image preparation and coordinates](#image-preparation-and-coordinates)
 7. [Region review](#region-review)
 8. [Command-line tools (Gradle tasks)](#command-line-tools-gradle-tasks)
-9. [Install, upgrade and uninstall](#install-upgrade-and-uninstall)
+9. [Install, upgrade and uninstall](#install-upgrade-and-uninstall) · [Release distributions](#release-distributions-linux-dist--win-dist)
 10. [Configuration](#configuration)
 11. [Reliability behaviour](#reliability-behaviour)
 12. [Resource usage and limits](#resource-usage-and-limits)
@@ -294,6 +294,54 @@ Options are passed by environment, so values with spaces are safe: `make install
 
 ---
 
+## Release distributions (linux-dist / win-dist)
+
+Two ready-to-zip directories for people who do **not** have the source, Gradle, Git or Make. They are *generated* (never hand-assembled),
+git-ignored, and packaged into archives in `release-output/`.
+
+```sh
+make models                       # once: fetch + verify the OCR models (they are bundled into the distributions)
+make dist-linux                   # -> linux-dist/       (linux-x64)          ./gradlew distLinux
+make dist-windows                 # -> win-dist/         (win-x64, cross-assembled)   ./gradlew distWindows
+make dist                         # both                                      ./gradlew dist
+make package                      # -> release-output/notebook-ai-<ver>-linux-x64.zip, ...-windows-x64.zip (+ .sha256), only from VALIDATED directories
+                                  #                                           ./gradlew package   (packageLinux / packageWindows individually)
+make verify-dist | dist-clean     # re-validate / remove only what this build generated   (./gradlew verifyDist | cleanDist)
+```
+
+On Windows without Make use `gradlew.bat distWindows packageWindows` (the same Gradle tasks). The default `build`/`installDist` is unchanged and builds nothing extra.
+
+What a recipient gets (Linux shown; Windows has `.cmd` equivalents and `scripts\install-windows.ps1`):
+
+```text
+notebook-ai-<ver>-linux-x64/          (single top-level directory in the ZIP)
+  install.sh  uninstall.sh  run-notebook-ai.sh    install per user / remove / run in place
+  README.txt  LICENSE  THIRD-PARTY-NOTICES.txt  licenses/    instructions and legal documents
+  distribution.json  SHA256SUMS                   metadata + checksum of every shipped file
+  scripts/launcher-body.sh                        shared launcher body (also used by the installed command)
+  app/{bin,lib,models,PLATFORM}                   the application, ONE platform's JavaFX + ONNX Runtime natives, the OCR models
+```
+
+- **Not fully standalone:** a **Java 21+ runtime must be installed separately** (no JRE is bundled; runtime bundling would need separate approval).
+  The recipient also needs a desktop session (Linux) / PowerShell 5.1+ for the installer (Windows) and the standard Unix tools the start script uses.
+- **Models are bundled** (PP-OCRv6_small, Apache-2.0 as declared by the model repositories), verified against `models/checksums.sha256` while
+  generating, so OCR works offline after extraction. Nothing is downloaded at install or run time; absent models produce an actionable error.
+- **One architecture per directory.** The ONNX Runtime jar (133 MB with every OS's natives) is repackaged to the target's natives only; the change is
+  documented in `THIRD-PARTY-NOTICES.txt` and recorded (original + trimmed SHA-256) in `distribution.json`.
+- **Direct run, no install:** `./run-notebook-ai.sh` / `run-notebook-ai.cmd` (works from any directory; checks Java; writes nothing into the folder).
+  `--self-check` runs a headless check of Java, the JavaFX modules, the ONNX natives and the models.
+- **Install / upgrade / uninstall** from the extracted folder use the same installers described above (`install.sh`, `uninstall.sh`; `install.cmd`, `uninstall.cmd`) in *packaged mode*: they verify `SHA256SUMS`
+  first, refuse the wrong platform, never build or download, and the installed command keeps working after the extracted folder is deleted.
+- **`distribution.json`** records name, version, source commit, whether the source tree was dirty, target OS/arch, required Java, model identities/checksums, native trimming, and the known licensing gaps.
+  Archives are generated with stable ordering and normalised timestamps; re-packaging an unchanged directory gave identical bytes (checked once), but reproducible builds are **not claimed**
+  (`distribution.json` carries a generation timestamp).
+
+**Not ready to ship yet (see `THIRD-PARTY-NOTICES.txt` "known gaps"):** the ONNX Runtime LICENSE text and the xmpcore copyright notice could not be obtained, the OpenJFX texts come from a repository
+snapshot rather than the 21.0.7 tag, and model licensing rests on repository metadata. The **Windows distribution has never been executed on Windows.**
+No archive has been published, tagged or released.
+
+---
+
 ## Configuration
 
 | Setting | Where | Effect |
@@ -377,7 +425,7 @@ understanding.
 ```sh
 ./gradlew clean build              # 130 JUnit tests (as of Phase 5 closure), 0 failures
 ./gradlew verifyOcrSetup           # model sessions load; checksums enforced
-make test-install                  # = sh tools/verify-install.sh: Linux installer + Makefile suite (145 checks, temporary locations only)
+make test-install                  # = sh tools/verify-install.sh: Linux installer + Makefile suite (156 checks, temporary locations only)
 pwsh -File tools/verify-install-windows.ps1   # Windows installer logic suite (114 checks + 4 Windows-only SKIPs when run on Linux)
 ./gradlew evaluate -PevalManifest=eval/cases.tsv
 ```
@@ -386,6 +434,11 @@ Evidence kinds are kept apart in [`HANDOFF.md`](HANDOFF.md): **automated tests**
 installed build under a private display, and **code inspection**. The installed-GUI checks performed were: independent
 per-page preparation, region copy/insert with real clipboard reads, reorder + exact export, save/close/reopen, filename
 behaviour, close-during-OCR, and edit-during-save. Anything not listed there was not GUI-verified.
+
+Distribution evidence: `make test-dist` (`tools/test-dist.sh`, 50 checks) extracts the real Linux archive into a path with spaces, runs it from another directory (headless `--self-check`
+and a GUI launch under a private display), installs it into a temporary HOME, deletes the extracted folder and re-runs the installed command, performs real OCR through the installed trimmed
+ONNX Runtime, upgrades, uninstalls and checks tamper refusal; `tools/test-dist-build.sh` (16 checks) tests the generator's safeguards; `tools/test-dist-windows.ps1` (34 checks + 5 Windows-only SKIPs on Linux) checks
+the Windows archive's content and packaged-mode installer logic.
 
 Installer evidence: the Linux suite (`tools/verify-install.sh`) really executes `install.sh`, the generated launcher and the Makefile
 in isolated temporary HOME/PATH environments (fresh install, upgrade, rollback, unsafe targets, spaces/non-ASCII paths, argument and
