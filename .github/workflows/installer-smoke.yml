@@ -1,0 +1,325 @@
+# Installer SMOKE test: "the generated installer builds, installs, and the installed application initializes" - nothing more.
+#
+#   Linux   : packageDeb -> apt install the generated .deb -> /usr/bin/notebook-ai --self-check
+#   Windows : packageExe -> silent install of the generated EXE -> notebook-ai-cli.exe --self-check
+#
+# What --self-check really verifies (src/main/java/notebookai/ui/Main.java + OcrSetup.verify): the bundled Java runtime, the JavaFX modules,
+# the model files with their SHA-256 checksums, the recognizer dictionary, and it CREATES a real ONNX Runtime session for the detector and
+# for the recognizer. It does not run OCR on an image and does not open a window. So this proves "installed application initializes on this
+# runner", NOT "OCR is accurate", NOT "GUI works", NOT "upgrade/uninstall works", NOT release approval.
+#
+# The comprehensive suites (tools/test-deb*.sh, tools/test-dist*.sh, tools/test-installer-windows.ps1, ZIP end-to-end, upgrade, uninstall,
+# file-lock, standard-user) are untouched and remain available for local/manual use and via the manual "installers" workflow.
+#
+# INTERNAL TEST BUILDS ONLY: unsigned; third-party license evidence is unresolved (packaging/licensing-status.json); NOT release-approved.
+# This workflow never signs, tags or publishes anything. verifyReleaseLicensing is NOT run here and is NOT weakened; the unresolved
+# licensing state is printed from the package's own native-package.json into every report.
+#
+# Posture: manual only (no push / pull_request / schedule trigger), read-only token, no secrets, actions pinned to commit SHAs,
+# no ${{ }} interpolation inside script bodies.
+name: installer-smoke
+run-name: installer smoke (${{ inputs.target }}) @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which installer to smoke-test'
+        type: choice
+        options: [both, linux, windows]
+        default: both
+
+permissions:
+  contents: read
+
+# A newer manual run on the same ref replaces an older one. The two jobs below do not depend on each other: one failing never cancels the other.
+concurrency:
+  group: installer-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Temurin 21 GA; setup-java matches a build-qualified version by exact semver, hence '+9.0.LTS'. The jobs fail unless the JDK really is this build.
+  TEMURIN_VERSION: '21.0.13+9.0.LTS'
+  EXPECTED_JAVA: '21.0.13+9'
+  # WiX 3.14.1 (last 3.x; JDK 21's jpackage supports WiX 3.x only). Used only if the runner image lacks a pre-installed 3.14.
+  WIX_URL: 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe'
+  WIX_SHA256: '6bf6d03d6923d9ef827ae1d943b90b42b8ebb1b0f68ef6d55f868fa34c738a29'
+
+jobs:
+  linux-deb:
+    name: Linux installer build/install/self-check
+    if: ${{ inputs.target == 'both' || inputs.target == 'linux' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-package: jdk
+          java-version: ${{ env.TEMURIN_VERSION }}
+          cache: gradle   # the single caching mechanism for Gradle (wrapper + dependencies); nothing else is cached except the models below
+
+      - name: Verify the packaging JDK
+        run: |
+          java -version 2>&1 | tee jdk.txt
+          grep -q Temurin jdk.txt && grep -q "$EXPECTED_JAVA" jdk.txt
+          test -d "$JAVA_HOME/jmods"
+
+      - name: Packaging prerequisites (only what is missing)
+        run: |
+          pkgs=""
+          command -v dpkg-deb >/dev/null || pkgs="$pkgs dpkg-dev"
+          command -v fakeroot >/dev/null || pkgs="$pkgs fakeroot"
+          command -v ldd >/dev/null || pkgs="$pkgs libc-bin"
+          if [ -n "$pkgs" ]; then sudo apt-get update -q && sudo apt-get install -y --no-install-recommends $pkgs; else echo "all packaging tools already present"; fi
+
+      - name: Restore models cache (key = hash of the pinned checksums)
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: models
+          key: models-${{ hashFiles('models/checksums.sha256') }}
+
+      - name: Models (always verified against models/checksums.sha256; downloads only what is missing or wrong)
+        timeout-minutes: 5
+        run: sh tools/download-models.sh
+
+      - name: Build the .deb (packageDeb only)
+        timeout-minutes: 10
+        run: ./gradlew packageDeb --console=plain --no-daemon
+
+      - name: Install the generated .deb with apt and run --self-check
+        timeout-minutes: 6
+        run: |
+          set -eu
+          mkdir -p smoke
+          n=$(ls release-output/notebook-ai_*_amd64.deb 2>/dev/null | wc -l)
+          [ "$n" = 1 ] || { echo "expected exactly one notebook-ai_*_amd64.deb in release-output/, found $n"; ls -l release-output; exit 1; }
+          DEB="$PWD/$(ls release-output/notebook-ai_*_amd64.deb)"
+          sha256sum "$DEB" | awk '{print $1}' > smoke/deb.sha
+          timeout 300 sudo apt-get install -y --no-install-recommends "$DEB" 2>&1 | tee smoke/apt-install.log
+          dpkg-query -W -f='${Status}\n' notebook-ai | grep -q 'install ok installed'
+          # the package-owned command, resolved explicitly (not whatever 'notebook-ai' PATH lookup might find)
+          dpkg -L notebook-ai | grep -qx /usr/bin/notebook-ai
+          CMD=/usr/bin/notebook-ai
+          [ "$(readlink -f "$CMD")" = /opt/notebook-ai/bin/notebook-ai ]
+          # controlled environment; the runner's JDK is left in place, java.home is checked instead
+          set +e
+          (cd / && env -i HOME="$RUNNER_TEMP" PATH=/usr/bin:/bin timeout 120 "$CMD" --self-check) > smoke/self-check.txt 2>&1
+          rc=$?
+          set -e
+          cat smoke/self-check.txt
+          echo "self-check exit status: $rc"
+          [ "$rc" = 0 ]
+          grep -q 'SELF-CHECK OK' smoke/self-check.txt
+          grep -q '^Java home: /opt/notebook-ai/lib/runtime' smoke/self-check.txt
+          grep -q 'ONNX Runtime: sessions created' smoke/self-check.txt
+          grep -q 'Checksums: OK' smoke/self-check.txt
+
+      - name: Report
+        if: ${{ success() }}
+        run: |
+          DEB=$(ls release-output/notebook-ai_*_amd64.deb)
+          {
+            echo "INTERNAL SMOKE-TEST BUILD - unsigned; release approval not granted."
+            echo "Check: Linux installer build/install/self-check (NOT full acceptance, NOT GUI, NOT release verification)."
+            echo "commit: $GITHUB_SHA"; echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "runner: ubuntu-22.04 ($(uname -r))"; echo "jdk: $(head -1 jdk.txt)"
+            echo "file: $(basename "$DEB")  size: $(stat -c %s "$DEB") bytes  sha256: $(cut -d' ' -f1 "$DEB.sha256")"
+            echo "model-session initialization (real ONNX sessions for detector and recognizer): yes, via --self-check"
+            echo "OCR on a real image / GUI / upgrade / uninstall: NOT tested here"
+            echo "--- licensing state of this package (unresolved evidence keeps it internal-only) ---"
+            python3 - <<'PY'
+          import json
+          m = json.load(open('/opt/notebook-ai/lib/legal/native-package.json'))
+          print('internalBuild:', m.get('internalBuild'))
+          for r in m.get('internalBuildReasons', []): print(' -', r)
+          PY
+            echo "--- self-check output ---"; cat smoke/self-check.txt
+          } | tee smoke/report.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the .deb, its SHA-256 and the report
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: internal-smoke-linux-deb-unsigned-NOT-release-approved
+          path: |
+            release-output/notebook-ai_*_amd64.deb
+            release-output/notebook-ai_*_amd64.deb.sha256
+            smoke/report.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload concise failure logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-smoke-failure-logs
+          path: |
+            smoke/apt-install.log
+            smoke/self-check.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows-exe:
+    name: Windows installer build/install/self-check
+    if: ${{ inputs.target == 'both' || inputs.target == 'windows' }}
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-package: jdk
+          java-version: ${{ env.TEMURIN_VERSION }}
+          cache: gradle
+
+      - name: Verify the packaging JDK
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $v = (cmd /c 'java -version 2>&1' | Out-String)
+          $v | Tee-Object smoke\jdk.txt
+          if ($v -notmatch 'Temurin') { throw 'the JDK is not Eclipse Temurin' }
+          if ($v -notmatch [regex]::Escape($env:EXPECTED_JAVA)) { throw "the JDK is not $env:EXPECTED_JAVA" }
+          if (-not (Test-Path "$env:JAVA_HOME\jmods")) { throw 'the JDK has no jmods' }
+          if (-not (Test-Path "$env:JAVA_HOME\bin\jpackage.exe")) { throw 'the JDK has no jpackage' }
+
+      - name: WiX Toolset 3.x (use the runner's pre-installed 3.14; otherwise the pinned, hash-verified 3.14.1)
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $root = 'C:\Program Files (x86)'
+          $bin = $null
+          $found = Get-ChildItem $root -Filter 'WiX Toolset v3.14*' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found -and (Test-Path (Join-Path $found.FullName 'bin\candle.exe'))) { $bin = Join-Path $found.FullName 'bin'; $how = "pre-installed ($($found.Name))" }
+          if (-not $bin) {
+            Invoke-WebRequest -Uri $env:WIX_URL -OutFile wix314.exe -UseBasicParsing
+            $h = (Get-FileHash wix314.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($h -ne $env:WIX_SHA256) { throw "WiX installer hash mismatch: $h" }
+            $p = Start-Process -FilePath .\wix314.exe -ArgumentList '/install', '/quiet', '/norestart' -PassThru
+            if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { }; throw 'WiX installer timed out' }
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "WiX installer exit code $($p.ExitCode)" }
+            $found = Get-ChildItem $root -Filter 'WiX Toolset v3*' | Select-Object -First 1
+            if ($found) { $bin = Join-Path $found.FullName 'bin' }
+            $how = "downloaded, sha256 $h"
+          }
+          if (-not $bin -or -not (Test-Path (Join-Path $bin 'candle.exe'))) { throw 'WiX 3.x tools not found' }
+          Add-Content $env:GITHUB_PATH $bin
+          $ver = (& (Join-Path $bin 'candle.exe') -? 2>&1 | Select-String -Pattern 'version' | Select-Object -First 1)
+          if ("$ver" -notmatch 'version 3\.') { throw "not a WiX 3.x tool: $ver" }
+          "WiX: $ver ($how)" | Tee-Object smoke\wix.txt
+          $global:LASTEXITCODE = 0   # candle -? leaves a non-zero status that GitHub's wrapper would otherwise report as this step's result
+
+      - name: Restore models cache (key = hash of the pinned checksums)
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: models
+          key: models-${{ hashFiles('models/checksums.sha256') }}
+
+      - name: Models (always verified against models/checksums.sha256; downloads only what is missing or wrong)
+        timeout-minutes: 5
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
+
+      - name: Build the EXE (packageExe only)
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Continue'
+          .\gradlew.bat packageExe --console=plain --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw "gradlew exit code $LASTEXITCODE" }
+
+      - name: Install the generated EXE silently and run --self-check
+        timeout-minutes: 8
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Run-Bounded([string]$file, [string]$arguments, [int]$seconds, [string]$outFile) {
+            $a = @{ FilePath = $file; PassThru = $true }
+            if ($arguments) { $a.ArgumentList = $arguments }
+            if ($outFile) { $a.RedirectStandardOutput = $outFile; $a.RedirectStandardError = "$outFile.err" }
+            $p = Start-Process @a
+            $null = $p.Handle                       # keep the handle so ExitCode is readable after the process ends
+            if (-not $p.WaitForExit($seconds * 1000)) { & taskkill.exe /PID $p.Id /T /F | Out-Null; throw "timed out after $seconds s: $file $arguments" }
+            return $p.ExitCode
+          }
+          $exes = @(Get-ChildItem release-output -Filter 'notebook-ai-*-windows-x64-setup.exe')
+          if ($exes.Count -ne 1) { throw "expected exactly one installer in release-output, found $($exes.Count)" }
+          $exe = $exes[0]
+          $log = Join-Path $env:RUNNER_TEMP 'nbai-install.log'
+          # '/qn /l*v <log>': msiexec-style switches accepted by the jpackage installer; verified on a Windows runner in earlier runs (exit 0).
+          # Exit codes: 0 = success, 3010 = success, restart required (MSI documented codes). Anything else fails.
+          $rc = Run-Bounded $exe.FullName "/qn /l*v `"$log`"" 240 $null
+          "installer exit code: $rc"
+          if ($rc -ne 0 -and $rc -ne 3010) { throw "installer failed with exit code $rc (log: $log)" }
+          $app = Join-Path $env:LOCALAPPDATA 'notebook-ai'
+          $cli = Join-Path $app 'notebook-ai-cli.exe'
+          if (-not (Test-Path -LiteralPath $cli)) { throw "installer reported success but $cli does not exist" }
+          $reg = @(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'notebook-ai*' })
+          if ($reg.Count -lt 1) { throw 'no uninstall registration for notebook-ai: the product is not registered as installed' }
+          "registered as installed: $($reg[0].DisplayName) $($reg[0].DisplayVersion)"
+          # direct invocation of the exact path; no PATH integration is expected or used
+          $out = Join-Path $env:RUNNER_TEMP 'self-check.txt'
+          $rc = Run-Bounded $cli '--self-check' 120 $out
+          $text = (Get-Content $out -Raw) + (Get-Content "$out.err" -Raw -ErrorAction SilentlyContinue)
+          $text | Tee-Object smoke\self-check.txt
+          "self-check exit status: $rc"
+          if ($rc -ne 0) { throw "self-check exit status $rc" }
+          if ($text -notmatch 'SELF-CHECK OK') { throw 'SELF-CHECK OK missing' }
+          if ($text -notmatch 'ONNX Runtime: sessions created') { throw 'ONNX sessions were not created' }
+          if ($text -notmatch 'Checksums: OK') { throw 'model checksums not confirmed' }
+          $jh = [regex]::Match($text, '(?m)^Java home: (.+?)\s*$').Groups[1].Value
+          if (-not $jh -or -not $jh.StartsWith($app, [StringComparison]::OrdinalIgnoreCase)) { throw "java.home '$jh' is not inside the install directory '$app'" }
+          "java.home is the bundled runtime: $jh"
+          Copy-Item $log smoke\msi-install.log -ErrorAction SilentlyContinue
+
+      - name: Report
+        if: ${{ success() }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = Get-Item release-output\notebook-ai-*-windows-x64-setup.exe
+          $sha = (Get-Content "$($exe.FullName).sha256").Split(' ')[0]
+          $pkg = Get-ChildItem "$env:LOCALAPPDATA\notebook-ai" -Recurse -Filter native-package.json | Select-Object -First 1
+          $m = Get-Content $pkg.FullName -Raw | ConvertFrom-Json
+          $lines = @(
+            'INTERNAL SMOKE-TEST BUILD - unsigned; release approval not granted.',
+            'Check: Windows installer build/install/self-check (NOT full acceptance, NOT GUI, NOT release verification).',
+            "commit: $env:GITHUB_SHA", "run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            "runner: windows-2022", "jdk: $((Get-Content smoke\jdk.txt)[0])", (Get-Content smoke\wix.txt),
+            "file: $($exe.Name)  size: $($exe.Length) bytes  sha256: $sha",
+            'model-session initialization (real ONNX sessions for detector and recognizer): yes, via --self-check',
+            'OCR on a real image / GUI / upgrade / uninstall / registry behaviour: NOT tested here',
+            '--- licensing state of this package (unresolved evidence keeps it internal-only) ---',
+            "internalBuild: $($m.internalBuild)") + @($m.internalBuildReasons | ForEach-Object { " - $_" }) + @('--- self-check output ---') + @(Get-Content smoke\self-check.txt)
+          $lines | Tee-Object smoke\report.txt | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload the EXE, its SHA-256 and the report
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: internal-smoke-windows-exe-unsigned-NOT-release-approved
+          path: |
+            release-output/notebook-ai-*-windows-x64-setup.exe
+            release-output/notebook-ai-*-windows-x64-setup.exe.sha256
+            smoke/report.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload concise failure logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-smoke-failure-logs
+          path: |
+            smoke/self-check.txt
+            smoke/msi-install.log
+            smoke/wix.txt
+          if-no-files-found: ignore
+          retention-days: 7

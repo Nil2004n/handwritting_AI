@@ -367,7 +367,7 @@ jpackage-built installers that **include their own Java runtime**, so end users 
 path (`lib/fx`, never the classpath), the four application jars on the classpath, the models in `lib/models`. The launcher passes `-Dnotebookai.models=$APPDIR/../models` (a native launcher cannot set environment variables);
 an explicit `NOTEBOOK_AI_MODELS` still wins. The package never uses `java` from `PATH` or `JAVA_HOME`. The runtime source is never downloaded by this build: it is the JDK named by `-PpackagingJdkHome`, `NBAI_PACKAGING_JDK`,
 `JAVA_HOME` (if it has `jmods`) or the Gradle toolchain, recorded in `lib/legal/native-package.json`. **A build from an early-access runtime (this development machine's Debian JDK is `21.0.11-ea`) is flagged an internal build.**
-CI (`native-installers.yml`, manual dispatch only) pins Temurin `21.0.13+9` (verified at run time) and WiX 3.14.1 (installer SHA-256 pinned).
+CI (`installer-smoke.yml`, manual dispatch only; replaced the former `native-installers.yml`) pins Temurin `21.0.13+9` (verified at run time) and WiX 3.14.1 (installer SHA-256 pinned).
 
 **Publisher fields** are configuration, not invented: `-PpublisherName="..." -PdebMaintainerEmail=...`. Unset values become clearly marked placeholders (`unconfigured@invalid`) and mark the build internal.
 There is no application icon in the repository, so jpackage's default icon is used.
@@ -385,7 +385,7 @@ is marked `internalBuild` with the reasons. Currently resolved: ONNX Runtime LIC
 **What has actually been verified (Linux x86-64 host, Kali):** the `.deb` builds and validates; extracted-payload execution with no Java on PATH (self-check, exit codes, model override, real OCR through the bundled runtime, a real GUI launch under a private display
 that maps the *bundled* `libjvm.so`); a real-`dpkg` lifecycle in a private non-root tree; and a real **apt** install/upgrade/remove/purge in a throw-away **Debian trixie** container (dependencies resolved by apt, no Java on the machine). **Not verified:** Ubuntu or any other Debian-family release,
 `lintian` (not installed), a GUI inside the container, and **everything about the Windows installer** - the `.exe` has never been built or run (no Windows machine); `checkNativeInputWindows` validates only the jpackage *input*.
-`tools/test-installer-windows.ps1` and the `native-installers` workflow exist for a real Windows runner and have not been run. Silent-install switches of jpackage's EXE and the `add-launcher` option inheritance are assumptions to confirm on first run.
+`tools/test-installer-windows.ps1` (comprehensive Windows lifecycle test, kept for manual/local use on a disposable Windows machine; its CI runs were slow and one stage stalled, so it is no longer run automatically) exists for a real Windows runner. The fast `installer-smoke` workflow is the routine CI evidence. Silent-install switches of jpackage's EXE and the `add-launcher` option inheritance are assumptions to confirm on first run.
 Windows PATH integration is **not offered** (it would need custom WiX work), so `notebook-ai` does **not** work globally in CMD. The console executable is `%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe` (e.g. `"%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe" --self-check`); add its folder to your user PATH yourself if you want a short name.
 Neither package is ready to ship.
 

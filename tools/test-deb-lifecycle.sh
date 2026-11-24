@@ -5,7 +5,7 @@
 # NBAI_DISPOSABLE_ENV=1 is set to confirm that this is a throw-away VM/container/CI runner. Never run it on a developer machine.
 #
 #   docker run --rm -v "$PWD:/src:ro" -e NBAI_DISPOSABLE_ENV=1 ubuntu:22.04 sh /src/tools/test-deb-lifecycle.sh /src/release-output/notebook-ai_0.1.0_amd64.deb
-#   (or the 'deb' job in .github/workflows/native-installers.yml)
+#   (this suite is no longer run by CI; the fast .github/workflows/installer-smoke.yml covers build/install/self-check only)
 set -u
 [ "${NBAI_DISPOSABLE_ENV:-}" = 1 ] || { echo "refusing: this test installs packages as root. Set NBAI_DISPOSABLE_ENV=1 ONLY inside a disposable VM/container/CI runner."; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "run as root inside the disposable environment"; exit 2; }

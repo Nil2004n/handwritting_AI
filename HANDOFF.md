@@ -954,3 +954,25 @@ A. Redistribution evidence: xmpcore notice (unresolved); model-weights grant (pa
 B. Build/release configuration: real publisher name and maintainer email; a GA runtime validated in a release build (CI uses Temurin 21.0.13+9; the local Linux build used an EA runtime); platform coverage (Windows EXE not yet built; Debian trixie/Kali-style names only).
 C. Trust and presentation: signing (nothing signed); application icon (jpackage default); package linting (`lintian` not run).
 Functional verification still open: everything Windows (no EXE has been built or run).
+
+
+## CI simplified to an installer smoke test (current)
+
+Why: the previous Windows workflow (`native-installers.yml`, now deleted; see git history) took 28-49 minutes per run. From the step
+timestamps that are still readable (run 45356458233): checkout+JDK+WiX ~10 s, models ~42 s, `packageExe` ~65 s, building a second 0.1.1
+installer ~30 s; the remainder was the comprehensive lifecycle/upgrade/file-lock/standard-user tests, whose steps stalled (the
+upgrade-while-running stage never completed; the earlier 49 min run ended with its lifecycle step still "in progress"). Raw logs of the
+stalled steps were never retrievable, so the exact blocking call inside them is NOT established. Linux `.deb` CI timings do not exist (it was never run in CI).
+
+Now: `.github/workflows/installer-smoke.yml`, `workflow_dispatch` only (`target` = both | linux | windows), two independent parallel jobs,
+20 min limit each, `contents: read`, no secrets.
+- Linux: `packageDeb` -> `apt-get install` the generated .deb -> `/usr/bin/notebook-ai --self-check` (package-owned path, `env -i`).
+- Windows: `packageExe` -> silent install (`/qn /l*v`, exit 0/3010) -> `%LOCALAPPDATA%\notebook-ai\notebook-ai-cli.exe --self-check`.
+- `--self-check` really checks: bundled runtime (`java.home` must be inside the install), JavaFX modules, model files + SHA-256, recognizer dictionary,
+  and creates real ONNX Runtime sessions for detector and recognizer. It does not run OCR on an image and opens no window.
+- Artifacts (7 days): the installer, its `.sha256`, a short report incl. the package's unresolved-licensing state. Names carry "unsigned-NOT-release-approved".
+- Automatic triggers removed: `native-installers.yml` (replaced) had none besides dispatch; `installers.yml` lost its `pull_request` trigger (now manual only).
+  Not run in CI any more: ZIP end-to-end suites, deb lifecycle/upgrade/purge, GUI tests, Windows upgrade/uninstall/file-lock/standard-user tests. All scripts remain in `tools/`.
+- NOT proven by this workflow: GUI behaviour, real OCR, upgrade/uninstall, non-admin install, release readiness. `verifyReleaseLicensing` is unchanged and still fails
+  while evidence is unresolved.
+- Open diagnosis (not done): why the first Windows lifecycle stage failed after ~38 s in run 45356458233 (report not retrieved).

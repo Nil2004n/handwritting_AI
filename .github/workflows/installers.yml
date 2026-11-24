@@ -2,11 +2,13 @@
 # The Windows job is the only place the cmd.exe wrapper, install.cmd and Windows file semantics are exercised.
 # (Added without being run locally: no Windows machine was available when it was written.)
 #
-# Triggers: manual (workflow_dispatch) and pull_request only. There is deliberately NO push trigger, so pushing commits never starts
-# a run by itself. Actions are pinned to commit SHAs; the token is read-only; no secrets are used.
+# COMPREHENSIVE SUITE - MANUAL ONLY. Slow (builds and archives both platforms and runs the ZIP end-to-end suites). The automatic
+# `pull_request` trigger that used to be here was REMOVED so that opening/updating a PR no longer starts it. For routine installer evidence
+# use the fast workflow "installer-smoke" (one .deb and one .exe: build, install, --self-check). This file and every test script it calls
+# are kept unchanged for deliberate, manual regression runs.
+# Actions are pinned to commit SHAs; the token is read-only; no secrets are used.
 name: installers
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:
