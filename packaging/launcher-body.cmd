@@ -22,6 +22,13 @@ if not defined NBAI_MAJ goto :launch
 set /a NBAI_N=%NBAI_MAJ% 2>nul
 if %NBAI_N% GTR 0 if %NBAI_N% LSS 21 goto :oldjava
 :launch
+rem Newer JDKs warn on every start about things this application legitimately does: JDK 23+ about sun.misc.Unsafe (JavaFX) and JDK 24+ about restricted native
+rem access (JavaFX and ONNX Runtime load native libraries). These flags state that this is intended. They are added ONLY for JDKs that know them (a JDK 21 rejects
+rem --sun-misc-unsafe-memory-access); JAVA_OPTS set by the user is kept.
+set "NBAI_EXTRA="
+if defined NBAI_N if %NBAI_N% GEQ 23 set "NBAI_EXTRA=--sun-misc-unsafe-memory-access=allow"
+if defined NBAI_N if %NBAI_N% GEQ 24 set "NBAI_EXTRA=%NBAI_EXTRA% --enable-native-access=javafx.graphics,ALL-UNNAMED"
+if defined NBAI_EXTRA set "JAVA_OPTS=%JAVA_OPTS% %NBAI_EXTRA%"
 if not defined NOTEBOOK_AI_MODELS set "NOTEBOOK_AI_MODELS=%NBAI_MODELS%"
 if not exist "%NOTEBOOK_AI_MODELS%\det.onnx" goto :nomodels
 call "%NBAI_START%" %*

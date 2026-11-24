@@ -12,6 +12,7 @@
 # Typical flow (as your NORMAL user, never sudo / Administrator):
 #   make build models              # compile + stage the distribution; fetch/verify models (network once)
 #   make install                   # per-user install (see install.sh --help for the layout)
+#   (the installed launcher adds the JVM flags Java 23+/24+ need, so a Java 25 default JDK starts without warnings; Windows: packaging/launcher-body.cmd)
 #   make uninstall                 # remove the owned installation
 #
 # Custom locations (any value, including spaces, is passed through the environment, never re-parsed):

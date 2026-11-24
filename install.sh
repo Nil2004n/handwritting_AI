@@ -54,6 +54,8 @@ Options:
 Preparation commands (run as your normal user, they are NOT run by the installer):
   make build models      or:  ./gradlew installDist  and  sh tools/download-models.sh
 
+The installed command adds the JVM flags that Java 23+/24+ need to start without warnings (JDK 21 gets none). Run as root through sudo, 'make install'
+installs system-wide (/usr/local); the Makefile then also refreshes the invoking user's own per-user installation (as that user).
 After installing: if the command directory is not on PATH the installer prints the exact line to add;
 it never edits your shell startup files. Project files (.nbai) and exports are never touched.
 EOF

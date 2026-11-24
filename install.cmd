@@ -1,6 +1,8 @@
 @echo off
 rem notebook-ai installer entry point for Windows (per-user, no Administrator rights needed).
 rem Usage: install.cmd [--help] [--add-to-path] [--no-path] [--app-dir DIR] [--uninstall] [--status] ...
+rem The installed launcher (notebook-ai.cmd) adds the JVM flags that Java 23+/24+ need to start without warnings (see packaging\launcher-body.cmd).
+rem Windows has no old-layout installation to upgrade and no sudo: this install is always per-user and never needs Administrator rights.
 rem Make is NOT required. This file only locates tools\install-windows.ps1 next to itself and runs it;
 rem it preserves the helper's exit code. Keep this file ASCII.
 setlocal DisableDelayedExpansion
