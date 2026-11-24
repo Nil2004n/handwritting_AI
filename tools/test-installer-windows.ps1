@@ -43,9 +43,10 @@ function Install-Silently([string]$path, [string]$tag) {
     if (Test-Path $log) { Copy-Item $log (Join-Path $Root "build\ci\msi-$tag.log") -ErrorAction SilentlyContinue }
     return $null
 }
+function Get-Prop($o, [string]$n) { $p = $o.PSObject.Properties[$n]; if ($p) { return $p.Value } else { return '' } }   # StrictMode-safe optional property
 function Get-Registered {
     $keys = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    return @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like '*notebook-ai*' } | ForEach-Object { [pscustomobject]@{ Name = $_.DisplayName; Version = $_.DisplayVersion; Key = $_.PSPath; Uninstall = $_.UninstallString } })
+    return @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like '*notebook-ai*' } | ForEach-Object { [pscustomobject]@{ Name = $_.DisplayName; Version = (Get-Prop $_ 'DisplayVersion'); Key = $_.PSPath; Uninstall = (Get-Prop $_ 'UninstallString') } })
 }
 function Get-PeSubsystem([string]$file) {      # 2 = Windows GUI (no console window), 3 = console
     $b = [IO.File]::ReadAllBytes($file); $pe = [BitConverter]::ToInt32($b, 0x3C); return [BitConverter]::ToUInt16($b, $pe + 0x5C)
@@ -68,7 +69,7 @@ $Docs = Join-Path $env:USERPROFILE 'Documents'; New-Item -ItemType Directory -Fo
 [IO.File]::WriteAllText((Join-Path $Docs 'work.nbai'), 'my project')
 $Prefs = Join-Path $env:APPDATA 'notebook-ai'; New-Item -ItemType Directory -Force -Path $Prefs | Out-Null
 [IO.File]::WriteAllText((Join-Path $Prefs 'prefs.txt'), 'my preferences')
-T 'before: no notebook-ai is registered on this machine' ((Get-Registered).Count -eq 0)
+T 'before: no notebook-ai is registered on this machine' (@(Get-Registered).Count -eq 0)
 
 Write-Host '== 1. install (per user)'
 $sw = Install-Silently $Exe 'first'
@@ -172,7 +173,7 @@ if ($un) {
     else { $r = Run-Exe 'cmd.exe' ("/c " + $un.Uninstall + " /quiet") 300 }
     T 'uninstall succeeded' ($r.Exit -eq 0 -or $r.Exit -eq 3010) ("exit " + $r.Exit)
     T 'the application directory is gone' (-not (Test-Path (Join-Path $App 'notebook-ai.exe')))
-    T 'removed from the uninstall list' ((Get-Registered).Count -eq 0)
+    T 'removed from the uninstall list' (@(Get-Registered).Count -eq 0)
     T 'the Start Menu shortcut is gone' (@(Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse -Filter '*notebook-ai*.lnk' -ErrorAction SilentlyContinue).Count -eq 0)
 } else { Bad 'no uninstall registration found' }
 T 'the user project in Documents survived uninstall' ((Get-Content (Join-Path $Docs 'work.nbai') -Raw) -eq 'my project')
