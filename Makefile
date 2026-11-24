@@ -78,7 +78,7 @@ UNINSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir 
 TEST_INSTALL_CMD = sh tools/verify-install.sh
 endif
 
-.PHONY: help build models test verify recognize run clean install uninstall status test-install system-deps \
+.PHONY: help build models test verify recognize run clean install upgrade uninstall status test-install system-deps \
         dist dist-linux dist-windows verify-dist package package-linux package-windows dist-clean test-dist \
         package-deb package-exe package-native verify-deb test-deb verify-release-licensing \
         check-env check-not-root
@@ -106,6 +106,7 @@ help:
 	@echo "  package-native    the installer type of THIS host   verify-deb   test-deb (no root)   verify-release-licensing (fails while evidence is unresolved)"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
+	@echo "  upgrade           make install + consent to replace the command left by the OLD 'make install' (same as REPLACE_LEGACY=1)"
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
 	@echo "                 Windows: ADD_TO_PATH=1 | NO_PATH=1"
 	@echo "Support: Linux x86-64 + GNU Make 4.x tested; Windows x64 dispatch implemented, untested; MSYS2/Git Bash/Cygwin/NMake unsupported."
@@ -223,6 +224,11 @@ endif
 # cannot create root-owned build files. All logic (validation, ownership, upgrade, rollback) lives in the installer.
 install: check-env
 	$(INSTALLER) $(INSTALL_ARGS)
+
+# Same as `make install`, but with consent to replace the command (and, for the per-user layout, point it at the new installation) left by the OLD
+# `make install`. Plain `make install` still refuses to do that without consent. The old application files are left in place.
+upgrade: check-env
+	$(MAKE) install REPLACE_LEGACY=1
 
 uninstall: check-env
 	$(INSTALLER) --uninstall $(UNINSTALL_ARGS)
