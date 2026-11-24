@@ -17,7 +17,8 @@
 # Custom locations (any value, including spaces, is passed through the environment, never re-parsed):
 #   make install APP_DIR=/path/app BIN_DIR=/path/bin          (Linux)
 #   make install APP_DIR=C:\path\Notebook-AI                  (Windows; also ADD_TO_PATH=1 or NO_PATH=1)
-#   make install PREFIX=/usr/local                            (Linux system-wide classic layout; copy only; use sudo)
+#   sudo make install                                         (Linux system-wide install into /usr/local; copy only; replaces the old-layout copy there)
+#   make install PREFIX=/usr/local                            (same, explicit; use sudo)
 #   make build PLATFORM=win-x64                               (stage a Windows distribution, e.g. from Linux)
 
 PREFIX ?=
@@ -54,6 +55,18 @@ endif
 
 # Effective user id; overridable ONLY so tools/verify-install.sh can exercise the root guard without being root.
 CURRENT_UID ?= $(shell id -u 2>/dev/null)
+
+# `sudo make install` (running as root with no explicit location) is a SYSTEM-WIDE install into /usr/local, replacing the old-layout copy there
+# (exact old structure only). Per-user installs never run as root (they would go into root's home). Copy only: it never builds or downloads, so build
+# first as your normal user (`make build models`). Override with PREFIX=/usr, KEEP_LEGACY=1 (refuse to replace the old copy), or APP_DIR=/BIN_DIR=.
+ifeq ($(CURRENT_UID),0)
+ifeq ($(PREFIX)$(APP_DIR)$(BIN_DIR),)
+PREFIX = /usr/local
+ifeq ($(REPLACE_LEGACY)$(KEEP_LEGACY),)
+REPLACE_LEGACY = 1
+endif
+endif
+endif
 
 ifeq ($(NBAI_HOST),windows)
 GRADLEW = gradlew.bat
@@ -108,6 +121,7 @@ help:
 	@echo "  package-native    the installer type of THIS host   verify-deb   test-deb (no root)   verify-release-licensing (fails while evidence is unresolved)"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
+	@echo "  sudo make install system-wide into /usr/local (copy only; replaces the old-layout copy there; build first as your normal user)"
 	@echo "  upgrade           same as make install (the per-user install already upgrades the command left by the OLD make install; KEEP_LEGACY=1 opts out)"
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
 	@echo "                 Windows: ADD_TO_PATH=1 | NO_PATH=1"
@@ -138,7 +152,7 @@ check-not-root: check-env
 		echo "       root-owned files in this repository. Run it as your normal user:"; \
 		echo "         make build models           # normal user"; \
 		echo "         make install                # per-user install, no sudo"; \
-		echo "         sudo make install PREFIX=/usr/local   # optional system-wide copy (never builds)"; \
+		echo "         sudo make install                     # optional system-wide copy into /usr/local (never builds)"; \
 		exit 1; \
 	fi
 endif
