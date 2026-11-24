@@ -31,6 +31,8 @@ PLATFORM ?=
 ADD_TO_PATH ?=
 NO_PATH ?=
 REPLACE_LEGACY ?=
+# SYSTEM_ONLY=1: with `sudo make install`, do not also refresh the invoking user's per-user installation.
+SYSTEM_ONLY ?=
 # KEEP_LEGACY=1 makes the default per-user `make install` refuse to replace the command left by the OLD `make install` (the old application files are never deleted either way).
 KEEP_LEGACY ?=
 export PREFIX DESTDIR APP_DIR BIN_DIR DIST MODELS_DIR
@@ -121,7 +123,7 @@ help:
 	@echo "  package-native    the installer type of THIS host   verify-deb   test-deb (no root)   verify-release-licensing (fails while evidence is unresolved)"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
-	@echo "  sudo make install system-wide into /usr/local (copy only; replaces the old-layout copy there; build first as your normal user)"
+	@echo "  sudo make install system-wide into /usr/local (copy only; replaces the old-layout copy there; also refreshes YOUR per-user install as you; SYSTEM_ONLY=1 skips that)"
 	@echo "  upgrade           same as make install (the per-user install already upgrades the command left by the OLD make install; KEEP_LEGACY=1 opts out)"
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
 	@echo "                 Windows: ADD_TO_PATH=1 | NO_PATH=1"
@@ -240,6 +242,21 @@ endif
 # cannot create root-owned build files. All logic (validation, ownership, upgrade, rollback) lives in the installer.
 install: check-env
 	$(INSTALLER) $(INSTALL_ARGS)
+ifeq ($(CURRENT_UID),0)
+ifeq ($(SYSTEM_ONLY),)
+# After a system-wide install through sudo, ALSO refresh the invoking user's own per-user installation (if there is one), run AS THAT USER (never as root), so an
+# older per-user copy cannot keep shadowing the new system-wide one. SYSTEM_ONLY=1 skips this.
+	@u="$$SUDO_USER"; \
+	if [ -n "$$u" ] && [ "$$u" != root ]; then \
+		uh=$$(getent passwd "$$u" | cut -d: -f6); \
+		if [ -n "$$uh" ] && [ -e "$$uh/.local/bin/notebook-ai" ]; then \
+			echo ""; echo "Also updating $$u's per-user installation (running 'make install' as $$u) ..."; \
+			sudo -u "$$u" -H $(MAKE) --no-print-directory install \
+				|| echo "warning: could not update the per-user installation; run 'make install' as $$u (no sudo)."; \
+		fi; \
+	fi
+endif
+endif
 
 # Kept as an explicit spelling: the default per-user `make install` now already replaces the command left by the OLD `make install`
 # (system layouts with PREFIX= still require REPLACE_LEGACY=1). The old application files are left in place.
