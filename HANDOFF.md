@@ -976,3 +976,52 @@ Now: `.github/workflows/installer-smoke.yml`, `workflow_dispatch` only (`target`
 - NOT proven by this workflow: GUI behaviour, real OCR, upgrade/uninstall, non-admin install, release readiness. `verifyReleaseLicensing` is unchanged and still fails
   while evidence is unresolved.
 - Open diagnosis (not done): why the first Windows lifecycle stage failed after ~38 s in run 45356458233 (report not retrieved).
+
+
+## Engine portability for a future Android app (2026-11-24)
+
+Goal: make the OCR engine reusable by an Android app while keeping the JavaFX app, installers and OCR behavior. Documentation for the mobile developer: **`docs/ENGINE.md`**.
+No OCR model/bytes/defaults/decoding were changed; no spell-checking was touched.
+
+### What changed (structure)
+* `engine/` (Gradle subproject, pure Java, `--release 17`, no runtime dependencies): `PixelImage` (portable BGR image contract), `ModelAssets` (directory or bytes, streaming checksum verification),
+  `OcrEngine` (the pipeline moved out of `OcrService` unchanged, plus a read/write lock so `close()` waits for running calls), `OcrResult`, `OcrException`, `ImageOps` (geometry only) and the pipeline internals.
+* Root project = desktop app: `DesktopImageIO` (ImageIO + metadata-extractor), `OcrService` (facade with the old API and the old models-directory precedence), AWT debug writers over a pure-data `RecognitionTrace`.
+  Engine and desktop share the package name `notebookai.ocr` (deliberate: package-private diagnostics; not JPMS-safe).
+* `android-proof/`: separate Gradle build (AGP 8.13.2) that includes `../engine`; not part of desktop builds (they need no SDK).
+* Packaging: the engine jar `notebookai-engine-<ver>.jar` is part of the distribution/native inputs (its name must NOT match `notebook-ai-*.jar`: install.sh/install-windows.ps1 require exactly one such jar). `-PreleaseOutputDir=DIR`
+  (default `release-output/`) lets packaging tests avoid retained artifacts. No `.gitignore` change was needed (`build/`, `.gradle/` already cover the new outputs).
+* Engine JDK API use was audited against Android API 24 and fixed: `java.nio.file` → `java.io.File` (`ModelAssets.fromDirectory(File)`), `String.isBlank` (API 33), `String.join` (API 26).
+
+### Source identities and executed verification (all on this machine, linux-x64, ONNX Runtime 1.22.0 CPU)
+| Item | Source | Result |
+|---|---|---|
+| Baseline before any refactoring edit | `a4b93d7` | 131 unit tests pass; `verifyOcrSetup` OK; repo handwriting case CER 0.179 (12 edits/67 chars), WER 0.385 (5/13); private case (not in Git) aggregate CER 0.055 (5/91), WER 0.167 (3/18); regenerated print fixture 4/4 lines exact; two fingerprint runs identical (298 lines) |
+| Stage 1 behavior preservation | `02e1efe`, `670ff42` | 157 tests, 0 failed, 0 skipped; boundary fingerprints (decode, working image, detector tensor+map, quads, crops, recognizer tensor, logits, raw transcripts) **identical** before/after for all 7 public images and for the private image (hash-only); same CER/WER; `verify-install.sh` 157/157; `test-dist-build.sh` 16/16; GUI launch under Xvfb (window title shown); `release-output/` byte-identical (`sha256sum -c`) |
+| Stage 2 modules | `793580f`, `74b0486`, `b875630` | 162 tests (126 desktop + 36 engine), 0 failed, 0 skipped; fingerprints identical again; clean-clone packaging (isolated `/tmp`): `distLinux`/`verifyDistLinux` valid (37 files, engine jar included), ZIP end-to-end `test-dist.sh` **50/50**, `packageDeb` + `test-deb.sh` **48 passed, 0 failed, 1 skipped** (lintian not installed), Windows static input check valid (5 jars) + `test-dist-build.sh` 16/16; `verifyReleaseLicensing` unchanged and still fails (xmpcore-license unresolved, ppocrv6-model-redistribution partial) |
+| Android build integration | `f760ccd` (working tree at build time) | dependency resolution OK (runtime classpath = engine + `onnxruntime-android:1.22.0`); `verifyEngineAndroidApi`: 246 JDK member references, none above API 24; D8 + APK assembled (71,551,166 bytes), minSdk 24, ABIs arm64-v8a + x86_64, no AWT/ImageIO/JavaFX/metadata-extractor/UI classes in the dex, models and fixture in assets |
+
+Defects found by the existing suites and fixed (not weakened): (1) the engine jar named `notebook-ai-engine-*` broke `install.sh`'s one-main-jar rule (ZIP e2e 33/50) → renamed `notebookai-engine-*`; (2) `verifyDeb` hard-coded 4 application jars → now exactly 5 and requires the engine jar by name.
+Negative controls: the compiled-class boundary scanner flags a real JDK AWT class; `tools/check-android-api.py` flags `String.isBlank`/`String.join` in the pre-fix code; **Android lint `NewApi` did NOT flag a deliberate `String.isBlank`**, so lint is not used as API evidence.
+
+### Reproduce
+```sh
+./gradlew test                                            # desktop + engine unit tests
+./gradlew :engine:build                                   # engine tests + verifyEngineDependencies
+./gradlew boundaryFingerprint -Pimages=... | diff src/test/resources/fixtures/boundary-baseline-public.txt -
+export ANDROID_HOME=$HOME/Android/Sdk
+./gradlew -p android-proof :app:verifyEngineAndroidApi :app:verifyProofDependencies :app:assembleDebug
+sh tools/android-proof-run.sh                             # PENDING: needs a device/emulator
+```
+Packaging tests in a fresh clone with `-PreleaseOutputDir=/tmp/x`; do not run `distLinux`/`test-dist-build.sh` in the working tree if `linux-dist/`/`win-dist/` must be kept.
+
+### Status
+1. **Stage 1 behavior preservation: VERIFIED** (identical boundary evidence and transcripts on this platform).
+2. **Module extraction: VERIFIED** on Linux (tests, dependency check, class-file boundary scan, clean-clone packaging). Windows packaging inputs verified only statically; **the Windows EXE was not rebuilt or re-tested after the refactor**.
+3. **Android build integration: VERIFIED** (build only).
+4. **Android runtime acceptance: PENDING.** No device; the only emulator image is x86_64 and this host has no `/dev/kvm`; booting it was offered and declined. Unmeasured: inference on Android, desktop-vs-Android comparison, arm64, API 24/25, memory, record desugaring at runtime, gray-image decode parity.
+5. **Desktop/packaging acceptance:** Linux ZIP and `.deb` checks above pass; GUI launch verified; Windows and GUI-extraction automation not re-run. The CI smoke workflow `installer-smoke.yml` was not changed and not run (its earlier result applies to commit `3cffc4f`, not to this refactor).
+6. **Mobile developer handoff readiness:** documentation, contracts, fixtures and a build-verified harness exist; **not Android-ready** until item 4 passes. iOS is a separate integration path (pipeline + models), not a target of the Java engine.
+
+### Not done / limits
+Release blockers unchanged: A) xmpcore notice evidence and explicit model redistribution grant (models are also bundled in the Android proof APK); B) real publisher/maintainer details, GA runtime validation (the local `.deb` here was built with a Debian early-access JDK), platform coverage; C) signing, icon, lintian. Nothing was pushed, tagged or released.
