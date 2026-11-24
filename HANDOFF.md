@@ -1054,9 +1054,15 @@ Design, rules, contracts, limits and measurements: **`docs/SPELLING.md`**. Sugge
 1. **Implementation complete:** suggestion-first spelling assistance with the required desktop UI; Replace All and automatic replacement deferred.
 2. **Automated verification: PASSED on Linux** (above).
 3. **Desktop GUI acceptance: PASSED** (33/33, in-process under Xvfb). Not done: pixel/click-level automation of native file dialogs (the flows were entered right after the choosers); not run on Windows.
-4. **Android compatibility:** build-level only (API ≤ 24 check, D8, APK). **Runtime PENDING** (no device; the dictionaries, checker and personal-dictionary storage are untested on Android).
-5. **Packaging acceptance:** Linux ZIP and `.deb` PASSED; Windows static only; the CI smoke workflow `installer-smoke.yml` was not changed and **not run** (its earlier result covers commit `3cffc4f` only).
+4. **Android compatibility:** build-level only (API ≤ 24 check, D8, APK). **Runtime PENDING** (no device; the dictionaries, checker and personal-dictionary storage are untested on Android). **The current Android proof harness does not test spelling**; a spelling test/harness must be added before any device spelling check can run, and building the APK with the spelling module does not prove its runtime behavior on Android.
+5. **Packaging acceptance:** Linux ZIP and `.deb` PASSED. Windows: static checks, plus the `installer-smoke.yml` run on commit `80f5f2e` (both jobs passed: build, silent install, installed `--self-check` only; an earlier run on `bf03ea2` failed on CRLF-converted word lists, fixed by `.gitattributes -text`). That smoke evidence covers `80f5f2e` only; GUI, real OCR, upgrade and uninstall on Windows remain unverified.
 6. **Release readiness: NOT release-approved.** Unchanged blockers: A) xmpcore notice evidence and explicit model redistribution grant; B) publisher/maintainer details, GA runtime validation, platform coverage; C) signing, icon, lintian. Spelling adds the `scowl-wordlists` item (resolved, no legal review).
 
 ### Not done / limits
 Dictionary lookup cannot find real-word OCR errors ("form"/"from"); names and technical terms are reported as unknown, not wrong; en-AU not offered; suggestion ranking is a weak heuristic; Ignore Once ordinals can shift; no inline underlines.
+
+## Known issue: installer reports say "source tree had uncommitted changes" (recorded 2026-11-24; not fixed)
+
+The CI smoke workflow writes scratch files into the checkout before packaging, so installer reports and `native-package.json` list "source tree had uncommitted changes" among the internal-build reasons even though the commit is exact and clean (the source commit was verified separately via the run's head SHA and each report's `commit:` line).
+Treat that reason as a false positive of the workflow. This entry only records the issue; the workflow was not changed and no artifact was rebuilt. Remediation to do later: put scratch files outside the checkout (`$RUNNER_TEMP`), check cleanliness before packaging, and verify the generated metadata.
+Smoke evidence and retained artifacts (`release-output/ci-smoke-bf03ea2/`, `release-output/ci-smoke-80f5f2e/`) belong to source commits `bf03ea2` and `80f5f2e`, not to later docs-only commits. See also `docs/MOBILE_HANDOFF.md` sections 4 and 6.
