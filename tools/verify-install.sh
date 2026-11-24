@@ -213,8 +213,20 @@ printf '#!/bin/sh\n' > "$H/.local/lib/notebook-ai/bin/notebook-ai"; chmod 755 "$
 run $(fixargs); [ "$RC" != 0 ] && has "$OUT" "OLD 'make install'" && grep -q legacy "$H/.local/bin/notebook-ai"; t "legacy command not replaced without --replace-legacy" $? "$OUT"
 run --replace-legacy $(fixargs); t "legacy command replaced with explicit --replace-legacy" $RC "$OUT"
 sed -n 2p "$H/.local/bin/notebook-ai" | grep -q 'owned-by=notebook-ai-installer'; t "the command is now an owned launcher" $?
-[ -f "$H/.local/lib/notebook-ai/lib/old.jar" ]; t "old application directory left in place (no automatic deletion)" $?
-tt "old installation reported with removal instructions" "$OUT" "OLD-layout installation at $H/.local/lib/notebook-ai"
+[ ! -e "$H/.local/lib/notebook-ai" ]; t "per-user upgrade with consent replaces the user-owned OLD-layout directory (exact old structure)" $?
+tt "the update is reported" "$OUT" "OLD-layout application directory $H/.local/lib/notebook-ai was replaced"
+[ -x "$H/.local/share/notebook-ai/dist/bin/notebook-ai" ] || [ -d "$H/.local/share/notebook-ai" ]; t "the new installation is in place" $?
+# not exactly the old structure (a user's own files inside): never removed, still reported
+newhome; mkdir -p "$H/.local/bin" "$H/.local/lib/notebook-ai/bin" "$H/.local/lib/notebook-ai/lib" "$H/.local/lib/notebook-ai/models" "$H/.local/lib/notebook-ai/my-projects"
+printf '#!/bin/sh\n# notebook-ai launcher (installed by make install).\n' > "$H/.local/bin/notebook-ai"; chmod 755 "$H/.local/bin/notebook-ai"
+printf '#!/bin/sh\n' > "$H/.local/lib/notebook-ai/bin/notebook-ai"; chmod 755 "$H/.local/lib/notebook-ai/bin/notebook-ai"; echo p > "$H/.local/lib/notebook-ai/my-projects/p.nbai"
+run --replace-legacy $(fixargs); [ -f "$H/.local/lib/notebook-ai/my-projects/p.nbai" ]; t "an old directory with extra files is NEVER removed by the upgrade" $?
+tt "...and it is still reported with the removal instructions" "$OUT" "OLD-layout installation at $H/.local/lib/notebook-ai"
+# without consent nothing about the old install changes
+newhome; mkdir -p "$H/.local/bin" "$H/.local/lib/notebook-ai/bin" "$H/.local/lib/notebook-ai/lib" "$H/.local/lib/notebook-ai/models"
+printf '#!/bin/sh\n' > "$H/.local/lib/notebook-ai/bin/notebook-ai"; chmod 755 "$H/.local/lib/notebook-ai/bin/notebook-ai"
+run $(fixargs); [ -d "$H/.local/lib/notebook-ai" ]; t "without --replace-legacy the old directory is untouched and reported" $? "$OUT"
+tt "...with the removal instructions" "$OUT" "OLD-layout installation at $H/.local/lib/notebook-ai"
 # classic prefix layout (what 'make install PREFIX=...' used): replacing an old-layout dir needs the flag
 P=$T/prefix; mkdir -p "$P/lib/notebook-ai/bin" "$P/lib/notebook-ai/lib" "$P/lib/notebook-ai/models" "$P/bin"
 printf '#!/bin/sh\n' > "$P/lib/notebook-ai/bin/notebook-ai"; chmod 755 "$P/lib/notebook-ai/bin/notebook-ai"

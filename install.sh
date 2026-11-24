@@ -44,7 +44,9 @@ Options:
   --build                opt-in: run './gradlew installDist' first (uses the network; refused as root)
   --replace-legacy       allow replacing (install) or removing (--uninstall --prefix P) a command or
                          application directory left by the OLD 'make install' layout. Only the exact old
-                         structure (bin/ lib/ models/ and nothing else) is ever touched; with --prefix only.
+                         structure (bin/ lib/ models/ and nothing else) is ever touched. A per-user install
+                         with this flag also removes the user-owned old directory ~/.local/lib/notebook-ai
+                         (system locations such as /usr/local are never touched without sudo and --prefix).
   --uninstall            remove the installation selected by the same options (also: 'uninstall')
   --status               show and verify the selected installation (also: 'status')
   -h, --help             this text
@@ -568,6 +570,18 @@ report_legacy() {
     for lp in "${HOME:-/nonexistent}/.local" /usr/local /usr; do
         old=$lp/lib/notebook-ai
         [ "$old" = "$APP_FINAL" ] && continue
+        # Per-user upgrade: with consent (the default of the per-user 'make install'), the user-owned OLD-layout directory is replaced by this
+        # installation, i.e. removed, but ONLY if it is exactly the old structure (bin/ lib/ models/ and nothing else) and writable. Its command
+        # was the same path as the new command, which has already been replaced. Anything else (extra files, no consent, system locations) is left alone.
+        if [ "$lp" = "${HOME:-/nonexistent}/.local" ] && [ "$LAYOUT" = user ] && [ "$REPLACE_LEGACY" = 1 ] && [ -z "$DESTDIR_ARG" ] \
+                && [ -d "$old" ] && legacy_app "$old" && [ -w "$lp/lib" ]; then
+            if rm -rf -- "$old"; then
+                info ""
+                info "Updated: the OLD-layout application directory $old was replaced by this installation and removed."
+                continue
+            fi
+            warn "could not remove the old application directory $old; it was left in place"
+        fi
         if [ -d "$old" ] && [ ! -f "$old/$MARKER" ] && [ -x "$old/bin/notebook-ai" ]; then
             info ""
             info "Found an OLD-layout installation at $old (not touched, not migrated)."
