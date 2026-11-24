@@ -2,7 +2,7 @@ package notebookai.ocr;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import notebookai.model.OcrResult;
+import notebookai.ocr.OcrResult;
 
 /**
  * CLI entry for {@code ./gradlew recognizeImage -Pimage=/path/to.jpg
@@ -51,7 +51,7 @@ public final class RecognizeCli {
                 result = service.recognize(Paths.get(imageArg), debugDir);
             } else {
                 // Same working-image path as the UI (rotate/straighten, then page OCR).
-                ImageOps.DecodedImage d = ImageOps.decode(Paths.get(imageArg));
+                PixelImage d = DesktopImageIO.decode(Paths.get(imageArg));
                 notebookai.model.WorkingImage wi =
                         new notebookai.model.WorkingImage(d.bgr(), d.width(), d.height());
                 wi.rotateSteps(rotateCw);

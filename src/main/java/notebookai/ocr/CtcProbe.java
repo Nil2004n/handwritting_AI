@@ -11,7 +11,7 @@ import java.util.Map;
 import javax.imageio.ImageIO;
 import notebookai.eval.Alignment;
 import notebookai.eval.Evaluate;
-import notebookai.model.OcrResult;
+import notebookai.ocr.OcrResult;
 import notebookai.model.WorkingImage;
 
 /**
@@ -56,7 +56,7 @@ public final class CtcProbe {
     }
 
     private static void probe(OcrService service, Evaluate.Case c, Path debugDir) throws Exception {
-        ImageOps.DecodedImage d = ImageOps.decode(c.image());
+        PixelImage d = DesktopImageIO.decode(c.image());
         WorkingImage wi = new WorkingImage(d.bgr(), d.width(), d.height());
         if (c.rotateCw() != 0) {
             wi.rotateSteps(c.rotateCw());
@@ -121,7 +121,7 @@ public final class CtcProbe {
             }
             if (debugDir != null) {
                 Files.createDirectories(debugDir);
-                ImageIO.write(ImageOps.toBufferedImage(crop.bgr(), crop.width(), crop.height()), "png",
+                ImageIO.write(DesktopImageIO.toBufferedImage(crop.bgr(), crop.width(), crop.height()), "png",
                         debugDir.resolve("probe_R" + i + "_crop.png").toFile());
             }
             logits.add(lg);

@@ -1,4 +1,4 @@
-package notebookai.model;
+package notebookai.ocr;
 
 import java.util.ArrayList;
 import java.util.Collections;

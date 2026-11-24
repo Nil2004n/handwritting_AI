@@ -1,12 +1,14 @@
 package notebookai.eval;
 
+import notebookai.ocr.PixelImage;
+import notebookai.ocr.DesktopImageIO;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import notebookai.model.OcrResult;
+import notebookai.ocr.OcrResult;
 import notebookai.model.WorkingImage;
 import notebookai.ocr.ImageOps;
 import notebookai.ocr.OcrException;
@@ -114,10 +116,10 @@ public final class Evaluate {
 
     public static Result evaluateCase(OcrService service, Case kase, Path debugDir)
             throws OcrException {
-        ImageOps.DecodedImage decoded;
+        PixelImage decoded;
         long decodeStart = System.nanoTime();
         try {
-            decoded = ImageOps.decode(kase.image());
+            decoded = DesktopImageIO.decode(kase.image());
         } catch (java.io.IOException e) {
             throw new OcrException("Could not read image " + kase.image() + ": " + e.getMessage(), e);
         }

@@ -57,7 +57,7 @@ public final class BoundaryFingerprint {
     static void fingerprint(OcrService service, Path image, boolean hashOnly) throws Exception {
         byte[] file = Files.readAllBytes(image);
         System.out.println("CASE " + image.getFileName() + " file_sha256=" + hex(MessageDigest.getInstance("SHA-256").digest(file)));
-        ImageOps.DecodedImage d = ImageOps.decode(image);
+        PixelImage d = DesktopImageIO.decode(image);
         System.out.println("decoded " + d.width() + "x" + d.height() + " " + pixelHash(d.bgr(), d.width(), d.height()));
         WorkingImage wi = new WorkingImage(d.bgr(), d.width(), d.height());
         WorkingImage.Rendered r = wi.render();
@@ -104,7 +104,7 @@ public final class BoundaryFingerprint {
             combinedRaw.append(raw).append('\n');
         }
         // The production path (this is what users and the evaluation see) on the same oriented pixels.
-        notebookai.model.OcrResult res = service.recognize(r.bgr(), r.width(), r.height(), null);
+        notebookai.ocr.OcrResult res = service.recognize(r.bgr(), r.width(), r.height(), null);
         String text = res.combinedText().replace("\n", "\\n");
         System.out.println("FINAL regions=" + res.regions().size() + " text_sha256=" + sha(text) + " text_len=" + text.length()
                 + (hashOnly ? "" : " text=\"" + text + "\""));

@@ -413,7 +413,7 @@ public final class ProjectStore {
             if (PageData.detectFormat(img) == null) {
                 throw bad(label, "the image for page " + id + " is not a JPEG or PNG");
             }
-            int[] dim = notebookai.ocr.ImageOps.peekDimensions(img);
+            int[] dim = notebookai.ocr.DesktopImageIO.peekDimensions(img);
             if (dim == null || dim[0] <= 0 || dim[1] <= 0) {
                 throw bad(label, "the image for page " + id + " is unreadable");
             }

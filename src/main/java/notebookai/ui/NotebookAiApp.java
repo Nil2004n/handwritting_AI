@@ -1,5 +1,7 @@
 package notebookai.ui;
 
+import notebookai.ocr.PixelImage;
+import notebookai.ocr.DesktopImageIO;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.ByteBuffer;
@@ -49,7 +51,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import notebookai.model.ControlState;
 import notebookai.model.ModelConfig;
-import notebookai.model.OcrResult;
+import notebookai.ocr.OcrResult;
 import notebookai.model.WorkingImage;
 import notebookai.ocr.ImageOps;
 import notebookai.project.BackgroundTasks;
@@ -514,7 +516,7 @@ public class NotebookAiApp extends Application {
      * decode fits in memory BEFORE allocating. May discard saved geometry that does not fit.
      */
     private static PageRestore.Restored buildWorking(PageData page) throws Exception {
-        int[] dim = ImageOps.peekDimensions(page.original());
+        int[] dim = DesktopImageIO.peekDimensions(page.original());
         if (dim == null) {
             throw new IllegalStateException("the image data is unreadable");
         }
@@ -522,17 +524,17 @@ public class NotebookAiApp extends Application {
         if (refuse != null) {
             throw new IllegalStateException(refuse);
         }
-        ImageOps.DecodedImage d = ImageOps.decode(page.original());
+        PixelImage d = DesktopImageIO.decode(page.original());
         return PageRestore.restore(page, d.bgr(), d.width(), d.height());
     }
 
     /** Rendered view for a thumbnail; never mutates the page (runs off the UI thread). */
     private static WorkingImage.Rendered thumbnailSource(PageData page) throws Exception {
-        int[] dim = ImageOps.peekDimensions(page.original());
+        int[] dim = DesktopImageIO.peekDimensions(page.original());
         if (dim == null || MemoryGuard.checkAgainstRuntime(dim[0], dim[1]) != null) {
             throw new IllegalStateException("cannot render a thumbnail");
         }
-        ImageOps.DecodedImage d = ImageOps.decode(page.original());
+        PixelImage d = DesktopImageIO.decode(page.original());
         int[] frame = WorkingImage.frameSize(d.width(), d.height(), page.quarterTurnsCw(), page.fineDegrees());
         int[] crop = page.crop();
         if (crop != null && !(crop[0] >= 0 && crop[1] >= 0 && crop[2] <= frame[0] && crop[3] <= frame[1]
@@ -734,7 +736,7 @@ public class NotebookAiApp extends Application {
                     errs.add(name + ": not a JPEG or PNG image");
                     continue;
                 }
-                int[] dim = ImageOps.peekDimensions(data);
+                int[] dim = DesktopImageIO.peekDimensions(data);
                 if (dim == null || (long) dim[0] * dim[1] > ProjectStore.MAX_PIXELS) {
                     errs.add(name + ": unreadable or larger than " + (ProjectStore.MAX_PIXELS / 1_000_000) + " megapixels");
                     continue;
@@ -744,7 +746,7 @@ public class NotebookAiApp extends Application {
                     errs.add(name + ": " + tooBig);
                     continue;
                 }
-                ImageOps.DecodedImage d = ImageOps.decode(data);
+                PixelImage d = DesktopImageIO.decode(data);
                 ok.add(new Imported(PageData.create(name, data), thumbnail(d.bgr(), d.width(), d.height())));
             } catch (java.nio.file.NoSuchFileException e) {
                 errs.add(name + ": file not found");

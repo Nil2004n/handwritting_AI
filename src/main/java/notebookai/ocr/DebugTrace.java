@@ -13,44 +13,28 @@ import java.util.Locale;
 import javax.imageio.ImageIO;
 
 /**
- * Opt-in per-stage trace (CLI {@code --debug-dir}). Records every detector
- * candidate and every recognized region BEFORE drop_score filtering, and
- * writes the probability map, candidate overlay, exact recognizer-input
- * crops and a plain-text {@code <stem>_trace.txt}. Detector scores and
- * recognition scores are kept in separate columns. Never touches the source
- * tree; nothing is written unless a debug directory is supplied.
+ * DESKTOP debug writer (AWT/ImageIO): turns a {@link RecognitionTrace} recorded by {@link OcrEngine} into files. Records
+ * every detector candidate and every recognized region BEFORE drop_score filtering, and writes the probability map, candidate
+ * overlay, exact recognizer-input crops and a plain-text {@code <stem>_trace.txt}. Detector scores and recognition scores
+ * are kept in separate columns. Never touches the source tree; nothing is written unless a debug directory is supplied.
  */
 final class DebugTrace {
 
-    /** One region that reached recognition (all of them, kept or dropped). */
-    record RegionTrace(
-            String id,
-            int candidateIndex,
-            int readingOrder,
-            double[][] polygon,
-            double detScore,
-            int cropW,
-            int cropH,
-            boolean rotated,
-            String rawText,
-            double recScore,
-            boolean kept,
-            byte[] cropBgr) {}
+    private DebugTrace() {}
 
-    int srcW;
-    int srcH;
-    String exifNote = "";
-    int detW;
-    int detH;
-    double scaleX; // source px per probability-map px
-    double scaleY;
-    float[][] prob;
-    final List<DbPostprocess.Candidate> candidates = new ArrayList<>();
-    final List<RegionTrace> regions = new ArrayList<>();
-    String finalText = "";
-
-    void write(Path dir, Path imagePath, ImageOps.DecodedImage decoded, double dropScore)
+    static void write(RecognitionTrace trace, Path dir, Path imagePath, PixelImage decoded, double dropScore)
             throws IOException {
+        final float[][] prob = trace.prob;
+        final List<DbPostprocess.Candidate> candidates = trace.candidates;
+        final List<RecognitionTrace.RegionTrace> regions = trace.regions;
+        final int srcW = trace.srcW;
+        final int srcH = trace.srcH;
+        final int detW = trace.detW;
+        final int detH = trace.detH;
+        final double scaleX = trace.scaleX;
+        final double scaleY = trace.scaleY;
+        final String exifNote = trace.exifNote;
+        final String finalText = trace.finalText;
         Files.createDirectories(dir);
         String stem = stem(imagePath);
 
@@ -94,7 +78,7 @@ final class DebugTrace {
         try {
             sg.setStroke(new java.awt.BasicStroke(4f));
             sg.setFont(sg.getFont().deriveFont(48f));
-            for (RegionTrace r : regions) {
+            for (RecognitionTrace.RegionTrace r : regions) {
                 sg.setColor(r.kept() ? Color.GREEN : Color.ORANGE);
                 Polygon p = new Polygon();
                 for (double[] pt : r.polygon()) {
@@ -109,7 +93,7 @@ final class DebugTrace {
         ImageIO.write(src, "png", dir.resolve(stem + "_regions.png").toFile());
         ImageIO.write(toBuffered(decoded.bgr(), srcW, srcH), "png", dir.resolve(stem + "_oriented.png").toFile());
 
-        for (RegionTrace r : regions) {
+        for (RecognitionTrace.RegionTrace r : regions) {
             ImageIO.write(
                     toBuffered(r.cropBgr(), r.cropW(), r.cropH()),
                     "png",
@@ -134,7 +118,7 @@ final class DebugTrace {
             t.append('\n');
         }
         t.append("\n== recognized regions, reading order, BEFORE drop_score (rec = RECOGNIZER score) ==\n");
-        for (RegionTrace r : regions) {
+        for (RecognitionTrace.RegionTrace r : regions) {
             t.append(String.format(Locale.ROOT,
                     "%s (cand C%d, final-order %d) det=%.3f rec=%.3f %s crop=%dx%d%s%n    quad=%s%n    raw=\"%s\"%n",
                     r.id(), r.candidateIndex(), r.readingOrder(), r.detScore(), r.recScore(),
@@ -163,7 +147,7 @@ final class DebugTrace {
     }
 
     static BufferedImage toBuffered(byte[] bgr, int w, int h) {
-        return ImageOps.toBufferedImage(bgr, w, h);
+        return DesktopImageIO.toBufferedImage(bgr, w, h);
     }
 
     private static String stem(Path path) {

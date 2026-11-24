@@ -28,14 +28,13 @@ import java.util.Map;
  */
 public final class ModelConfig {
 
-    public static final String MODEL_IDENTITY =
-            "PP-OCRv6_small (det 2.48M params + rec 5.2M params, ONNX, ONNX Runtime CPU)";
+    public static final String MODEL_IDENTITY = notebookai.ocr.ModelAssets.MODEL_IDENTITY;
 
-    public static final String DET_ONNX = "det.onnx";
-    public static final String DET_YML = "det.yml";
-    public static final String REC_ONNX = "rec.onnx";
-    public static final String REC_YML = "rec.yml";
-    public static final String CHECKSUMS = "checksums.sha256";
+    public static final String DET_ONNX = notebookai.ocr.ModelAssets.DET_ONNX;
+    public static final String DET_YML = notebookai.ocr.ModelAssets.DET_YML;
+    public static final String REC_ONNX = notebookai.ocr.ModelAssets.REC_ONNX;
+    public static final String REC_YML = notebookai.ocr.ModelAssets.REC_YML;
+    public static final String CHECKSUMS = notebookai.ocr.ModelAssets.CHECKSUMS;
 
     private ModelConfig() {}
 

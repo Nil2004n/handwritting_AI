@@ -428,12 +428,12 @@ class ProjectStoreTest {
         byte[] png = TestImages.png(33, 21, 5);
         Path f = dir.resolve("x.png");
         Files.write(f, png);
-        var a = notebookai.ocr.ImageOps.decode(f);
-        var b = notebookai.ocr.ImageOps.decode(png);
+        var a = notebookai.ocr.DesktopImageIO.decode(f);
+        var b = notebookai.ocr.DesktopImageIO.decode(png);
         assertEquals(a.width(), b.width());
         assertEquals(a.height(), b.height());
         assertArrayEquals(a.bgr(), b.bgr());
-        assertArrayEquals(new int[] {33, 21}, notebookai.ocr.ImageOps.peekDimensions(png));
-        assertNull(notebookai.ocr.ImageOps.peekDimensions(new byte[] {1, 2, 3}));
+        assertArrayEquals(new int[] {33, 21}, notebookai.ocr.DesktopImageIO.peekDimensions(png));
+        assertNull(notebookai.ocr.DesktopImageIO.peekDimensions(new byte[] {1, 2, 3}));
     }
 }

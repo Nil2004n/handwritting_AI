@@ -1,5 +1,7 @@
 package notebookai.project;
 
+import notebookai.ocr.PixelImage;
+import notebookai.ocr.DesktopImageIO;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -36,7 +38,7 @@ class Phase5IntegrityTest {
     }
 
     private static WorkingImage fresh(byte[] png) throws Exception {
-        ImageOps.DecodedImage d = ImageOps.decode(png);
+        PixelImage d = DesktopImageIO.decode(png);
         return new WorkingImage(d.bgr(), d.width(), d.height());
     }
 
@@ -89,7 +91,7 @@ class Phase5IntegrityTest {
         ProjectData back = ProjectStore.load(file);
         for (int i = 0; i < 4; i++) {
             PageData p = back.pages().get(i);
-            ImageOps.DecodedImage d = ImageOps.decode(p.original());
+            PixelImage d = DesktopImageIO.decode(p.original());
             PageRestore.Restored r = PageRestore.restore(p, d.bgr(), d.width(), d.height());
             assertTrue(r.notices().isEmpty(), names[i] + ": " + r.notices());
             WorkingImage.Rendered rebuilt = r.working().render();
@@ -123,7 +125,7 @@ class Phase5IntegrityTest {
     @Test
     void anUnfittingSavedCropOrRegionsAreDiscardedVisiblyNotShownStale() throws Exception {
         byte[] png = TestImages.png(80, 50, 5);
-        ImageOps.DecodedImage d = ImageOps.decode(png);
+        PixelImage d = DesktopImageIO.decode(png);
         // crop larger than the rebuilt frame
         PageData bigCrop = PageData.create("c.png", png);
         bigCrop.setPrep(0, 0.0, new int[] {0, 0, 500, 400});

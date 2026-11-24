@@ -185,7 +185,7 @@ class DetectionRegressionTest {
         java.nio.file.Path tmp = java.nio.file.Files.createTempFile("chan", ".png");
         try {
             javax.imageio.ImageIO.write(img, "png", tmp.toFile());
-            byte[] bgr = ImageOps.decode(tmp).bgr();
+            byte[] bgr = DesktopImageIO.decode(tmp).bgr();
             assertEquals(0, bgr[0] & 0xFF, "red pixel: B");
             assertEquals(0, bgr[1] & 0xFF, "red pixel: G");
             assertEquals(255, bgr[2] & 0xFF, "red pixel: R is the LAST byte in BGR");

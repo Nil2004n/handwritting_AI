@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import javax.imageio.ImageIO;
-import notebookai.model.OcrResult;
 
 /**
  * Debug artifact writer: source overlay with region boxes plus one image per
@@ -20,7 +19,7 @@ public final class DebugImages {
     private DebugImages() {}
 
     public static void write(
-            Path debugDir, Path imagePath, ImageOps.DecodedImage decoded, OcrResult result)
+            Path debugDir, Path imagePath, PixelImage decoded, OcrResult result)
             throws OcrException {
         try {
             Files.createDirectories(debugDir);
@@ -57,12 +56,12 @@ public final class DebugImages {
         }
     }
 
-    private static BufferedImage toBuffered(ImageOps.DecodedImage decoded) {
+    private static BufferedImage toBuffered(PixelImage decoded) {
         return toBuffered(decoded.bgr(), decoded.width(), decoded.height());
     }
 
     private static BufferedImage toBuffered(byte[] bgr, int w, int h) {
-        return ImageOps.toBufferedImage(bgr, w, h);
+        return DesktopImageIO.toBufferedImage(bgr, w, h);
     }
 
     private static String stem(Path path) {

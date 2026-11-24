@@ -55,25 +55,25 @@ class PipelineTest {
     void combinedTextJoinsRegionsWithLineBreaks() {
         var regions =
                 java.util.List.of(
-                        new notebookai.model.OcrResult.TextRegion(
+                        new notebookai.ocr.OcrResult.TextRegion(
                                 new double[][] {{0, 0}, {1, 0}, {1, 1}, {0, 1}},
                                 new int[] {0, 0, 1, 1},
                                 "hello",
                                 0.9,
                                 0.95),
-                        new notebookai.model.OcrResult.TextRegion(
+                        new notebookai.ocr.OcrResult.TextRegion(
                                 new double[][] {{0, 2}, {1, 2}, {1, 3}, {0, 3}},
                                 new int[] {0, 2, 1, 3},
                                 "world",
                                 0.9,
                                 0.95));
         var result =
-                new notebookai.model.OcrResult(
+                new notebookai.ocr.OcrResult(
                         10,
                         10,
                         regions,
                         "hello\nworld",
-                        new notebookai.model.OcrResult.Timings(0, 0, 0, 0, 0, 0, 0, 0));
+                        new notebookai.ocr.OcrResult.Timings(0, 0, 0, 0, 0, 0, 0, 0));
         assertEquals("hello\nworld", result.combinedText());
         assertEquals(2, result.regions().size());
     }
@@ -103,7 +103,7 @@ class PipelineTest {
         Path text = tempDir.resolve("note.txt");
         Files.write(text, "not an image".getBytes());
         OcrException failure =
-                assertThrows(OcrException.class, () -> ImageOps.decode(text));
+                assertThrows(OcrException.class, () -> DesktopImageIO.decode(text));
         assertTrue(failure.getMessage().contains("JPG/JPEG and PNG"), failure.getMessage());
     }
 }

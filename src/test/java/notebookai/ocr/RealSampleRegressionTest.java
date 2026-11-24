@@ -7,7 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
-import notebookai.model.OcrResult;
+import notebookai.ocr.OcrResult;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 

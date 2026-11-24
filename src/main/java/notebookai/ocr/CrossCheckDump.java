@@ -45,7 +45,7 @@ public final class CrossCheckDump {
 
     private static void dump(OcrService service, Evaluate.Case c, Path dir) throws Exception {
         Files.createDirectories(dir);
-        ImageOps.DecodedImage d = ImageOps.decode(c.image());
+        PixelImage d = DesktopImageIO.decode(c.image());
         WorkingImage wi = new WorkingImage(d.bgr(), d.width(), d.height());
         if (c.rotateCw() != 0) {
             wi.rotateSteps(c.rotateCw());
