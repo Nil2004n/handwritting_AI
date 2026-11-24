@@ -58,6 +58,23 @@ function Invoke-Native([string]$file, [string[]]$arguments = @()) {
     try { $o = (& $file @arguments 2>&1 | ForEach-Object { "$_" }) -join "`n"; $c = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
     return @{ Out = [string]$o; Exit = $c }
 }
+# Runs a command line as ANOTHER (standard) local user through a one-shot scheduled task and returns its exit code and output.
+# (Start-Process -Credential failed on the CI runner image; a scheduled task with a password logon works for a non-elevated token.)
+function Run-AsUser([string]$user, [string]$plainPw, [string]$cmdline, [int]$timeoutSec = 300) {
+    $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $dir = 'C:\Users\Public\nbai-std'; $out = Join-Path $dir "out-$tag.txt"; $rcf = Join-Path $dir "rc-$tag.txt"; $wrapper = Join-Path $dir "run-$tag.cmd"
+    [IO.File]::WriteAllText($wrapper, ("@echo off`r`n" + $cmdline + " > `"" + $out + "`" 2>&1`r`necho %ERRORLEVEL% > `"" + $rcf + "`"`r`n"), [Text.Encoding]::ASCII)
+    $name = "nbai-std-$tag"
+    $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + $wrapper + '"') -WorkingDirectory $dir
+    Register-ScheduledTask -TaskName $name -Action $action -User ($env:COMPUTERNAME + '\' + $user) -Password $plainPw -RunLevel Limited | Out-Null
+    try {
+        Start-ScheduledTask -TaskName $name
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt $timeoutSec) { Start-Sleep -Seconds 3; if ((Test-Path $rcf) -and ((Get-ScheduledTask -TaskName $name).State -ne 'Running')) { break } }
+        $rc = if (Test-Path $rcf) { [int]((Get-Content $rcf -Raw).Trim()) } else { -999 }
+        return @{ Exit = $rc; Out = $(if (Test-Path $out) { [string](Get-Content $out -Raw) } else { '' }) }
+    } finally { Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue }
+}
 function Strip-Java { $script:old = @{ PATH = $env:PATH; JAVA_HOME = $env:JAVA_HOME }; $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'java.exe')) }) -join ';'; Remove-Item Env:\JAVA_HOME -ErrorAction SilentlyContinue }
 function Restore-Java { $env:PATH = $script:old.PATH; if ($script:old.JAVA_HOME) { $env:JAVA_HOME = $script:old.JAVA_HOME } }
 
@@ -79,40 +96,40 @@ $Prefs = Join-Path $env:APPDATA 'notebook-ai'; New-Item -ItemType Directory -For
 T 'before: no notebook-ai is registered on this machine' (@(Get-Registered).Count -eq 0)
 
 Write-Host '== 1a. standard-user (NON-Administrator) install: the per-user claim, tested where it can be'
-$stdUser = 'nbaitest'; $stdDone = $false
+$stdUser = 'nbaitest'
 try {
     $pwPlain = [guid]::NewGuid().ToString('N') + 'aA1!'
     $sec = ConvertTo-SecureString $pwPlain -AsPlainText -Force
     if (Get-LocalUser -Name $stdUser -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $stdUser }
     New-LocalUser -Name $stdUser -Password $sec -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
-    $cred = New-Object System.Management.Automation.PSCredential(($env:COMPUTERNAME + '\' + $stdUser), $sec)
+    # 'Performance Log Users' carries the "log on as a batch job" right a scheduled task needs; it does NOT make the account an administrator.
+    Add-LocalGroupMember -Group 'Performance Log Users' -Member $stdUser
     $pub = 'C:\Users\Public\nbai-std'; New-Item -ItemType Directory -Force -Path $pub | Out-Null
     Copy-Item -LiteralPath $Exe -Destination (Join-Path $pub 'setup.exe') -Force
     [void](Invoke-Native 'icacls.exe' @($pub, '/grant', 'Users:(OI)(CI)M'))
-    T 'the test account is a standard user (not a member of Administrators)' (@(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like ('*\' + $stdUser) }).Count -eq 0)
-    $p = Start-Process -FilePath (Join-Path $pub 'setup.exe') -ArgumentList '/qn' -Credential $cred -LoadUserProfile -WorkingDirectory $pub -PassThru
-    if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { }; Bad 'the standard-user install timed out' }
-    else {
-        Obs ("standard-user installer exit code: " + $p.ExitCode)
-        $uApp = 'C:\Users\' + $stdUser + '\AppData\Local\notebook-ai'
-        T 'a standard user (no Administrator rights) can install; files go to that user''s %LOCALAPPDATA%' (Test-Path (Join-Path $uApp 'notebook-ai.exe')) ("exit " + $p.ExitCode)
-        T 'the standard-user install created NO machine-wide (HKLM) registration' (@(Get-Registered | Where-Object { $_.Key -like '*HKEY_LOCAL_MACHINE*' }).Count -eq 0) ((Get-Registered) | Out-String)
-        $hive = 'NbaiStdHive'; $uCode = ''
-        [void](Invoke-Native 'reg.exe' @('load', ('HKU\' + $hive), ('C:\Users\' + $stdUser + '\NTUSER.DAT')))
-        try {
-            $ents = @(Get-ItemProperty ('Registry::HKEY_USERS\' + $hive + '\Software\Microsoft\Windows\CurrentVersion\Uninstall\*') -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like '*notebook-ai*' })
-            T 'the product is registered in THAT USER''s own registry hive (per-user install)' ($ents.Count -eq 1) ($ents | Out-String)
-            if ($ents.Count -ge 1) { $uCode = [regex]::Match($ents[0].PSChildName, '\{[0-9A-Fa-f-]+\}').Value }
-        } finally { [gc]::Collect(); Start-Sleep -Seconds 2; [void](Invoke-Native 'reg.exe' @('unload', ('HKU\' + $hive))) }
-        $of = Join-Path $pub 'selfcheck.txt'
-        $q = Start-Process -FilePath (Join-Path $uApp 'notebook-ai-cli.exe') -ArgumentList '--self-check' -Credential $cred -LoadUserProfile -WorkingDirectory $pub -RedirectStandardOutput $of -PassThru
-        if ($q.WaitForExit(180000)) { $sc = if (Test-Path $of) { Get-Content $of -Raw } else { '' }; T 'the standard user can run notebook-ai-cli --self-check (bundled runtime)' ($q.ExitCode -eq 0 -and $sc -like '*SELF-CHECK OK*') ("exit " + $q.ExitCode) } else { try { $q.Kill() } catch { }; Bad 'standard-user self-check timed out' }
-        if ($uCode) {
-            $u = Start-Process -FilePath 'msiexec.exe' -ArgumentList ('/x ' + $uCode + ' /qn') -Credential $cred -LoadUserProfile -WorkingDirectory $pub -PassThru
-            if ($u.WaitForExit(300000)) { T 'the standard user can uninstall' ($u.ExitCode -eq 0 -or $u.ExitCode -eq 3010) ("exit " + $u.ExitCode); T 'uninstall removed the per-user application directory' (-not (Test-Path (Join-Path $uApp 'notebook-ai.exe'))) } else { try { $u.Kill() } catch { }; Bad 'standard-user uninstall timed out' }
-        } else { Skip 'standard-user uninstall not attempted (product code not found)' }
-        $stdDone = $true
+    $members = @(Get-LocalGroupMember -Group 'Administrators' | ForEach-Object { $_.Name })
+    T 'the test account is a standard user (not a member of Administrators)' (@($members | Where-Object { $_ -like ('*\' + $stdUser) }).Count -eq 0)
+    $r = Run-AsUser $stdUser $pwPlain ('"' + (Join-Path $pub 'setup.exe') + '" /qn')
+    Obs ("standard-user installer exit code: " + $r.Exit)
+    $uApp = 'C:\Users\' + $stdUser + '\AppData\Local\notebook-ai'
+    T 'a standard user (no Administrator rights) can install; files go to that user''s %LOCALAPPDATA%' (Test-Path (Join-Path $uApp 'notebook-ai.exe')) ("exit " + $r.Exit + " " + $r.Out)
+    T 'the standard-user install created NO machine-wide (HKLM) registration' (@(Get-Registered | Where-Object { $_.Key -like '*HKEY_LOCAL_MACHINE*' }).Count -eq 0) ((Get-Registered) | Out-String)
+    $hive = 'NbaiStdHive'; $uCode = ''
+    [void](Invoke-Native 'reg.exe' @('load', ('HKU\' + $hive), ('C:\Users\' + $stdUser + '\NTUSER.DAT')))
+    try {
+        $ents = @(Get-ItemProperty ('Registry::HKEY_USERS\' + $hive + '\Software\Microsoft\Windows\CurrentVersion\Uninstall\*') -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like '*notebook-ai*' })
+        T 'the product is registered in THAT USER''s own registry hive (per-user install)' ($ents.Count -eq 1) ($ents | Out-String)
+        if ($ents.Count -ge 1) { $uCode = [regex]::Match($ents[0].PSChildName, '\{[0-9A-Fa-f-]+\}').Value }
+    } finally { [gc]::Collect(); Start-Sleep -Seconds 2; [void](Invoke-Native 'reg.exe' @('unload', ('HKU\' + $hive))) }
+    if (Test-Path (Join-Path $uApp 'notebook-ai-cli.exe')) {
+        $r2 = Run-AsUser $stdUser $pwPlain ('"' + (Join-Path $uApp 'notebook-ai-cli.exe') + '" --self-check')
+        T 'the standard user can run notebook-ai-cli --self-check (bundled runtime)' ($r2.Exit -eq 0 -and $r2.Out.Contains('SELF-CHECK OK')) ("exit " + $r2.Exit)
     }
+    if ($uCode) {
+        $r3 = Run-AsUser $stdUser $pwPlain ('msiexec.exe /x ' + $uCode + ' /qn')
+        T 'the standard user can uninstall' ($r3.Exit -eq 0 -or $r3.Exit -eq 3010) ("exit " + $r3.Exit)
+        T 'uninstall removed the per-user application directory' (-not (Test-Path (Join-Path $uApp 'notebook-ai.exe')))
+    } else { Skip 'standard-user uninstall not attempted (product code not found in the user hive)' }
 } catch { Skip ("standard-user install could NOT be tested on this machine (harness problem, NOT a pass): " + $_.Exception.Message) }
 finally {
     try { Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -eq ('C:\Users\' + $stdUser) } | Remove-CimInstance -ErrorAction SilentlyContinue } catch { }
@@ -168,7 +185,7 @@ try {
     $f = New-Object System.Drawing.Font('Arial', 44); $g.DrawString('Hello world 123', $f, [System.Drawing.Brushes]::Black, 60, 50); $g.DrawString('Pack my box 456', $f, [System.Drawing.Brushes]::Black, 60, 220)
     $img = Join-Path $wd 'ocr input.png'; $bmp.Save($img, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
     $r = Invoke-Native (Join-Path $App 'runtime\bin\java.exe') @(('-Dnotebookai.models=' + (Join-Path $App 'models')), '-cp', ((Join-Path $App 'app') + '\*'), 'notebookai.ocr.RecognizeCli', $img); $ocr = $r.Out
-    T 'RecognizeCli (real OCR) on a generated image runs on the bundled runtime and reads the text' ($r.Exit -eq 0 -and $ocr.Contains('Hello world 123') -and $ocr.Contains('Pack my box 456')) $ocrcr
+    T 'RecognizeCli (real OCR) on a generated image runs on the bundled runtime and reads the text' ($r.Exit -eq 0 -and $ocr.Contains('Hello world 123') -and $ocr.Contains('Pack my box 456')) $ocr
 } finally { Pop-Location; Restore-Java }
 
 Write-Host '== 3. GUI launch (what a runner allows; --self-check is NOT a GUI acceptance test)'
