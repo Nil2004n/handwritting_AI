@@ -890,3 +890,38 @@ Starting checkpoint verified: `main` at `bb60a79`, 4 commits ahead of `origin/ma
 ### Verified on the Linux host
 Generation of both directories and archives; archive structure (single top-level directory, exec bits, normalised timestamps); extraction into a path with spaces; SHA256SUMS; metadata vs payload; no embedded developer paths; headless `--self-check` from the extracted archive and from the installed copy; real OCR through the installed trimmed ONNX Runtime; GUI window launched from the extracted archive under a private Xvfb display;
 install, deletion of the extracted folder, upgrade, uninstall, tamper refusal; generator safeguards incl. mutation checks. Re-packaging an unchanged directory produced identical bytes once; reproducible builds are not claimed.
+
+## Native installers: .deb and Windows .exe with a bundled Java runtime (2026-11-24)
+Starting checkpoint verified: `main` at `59990a6`, **8** commits ahead of `origin/main` (`abfc7ff`), clean tree (an earlier report said 4). Nothing pushed, tagged or published.
+
+### Decisions (grounded)
+- Packaging toolchain stays on the Java 21 baseline. The only local JDK 21 is a Debian **early-access** build (`21.0.11-ea`), so it is used only for internal builds; the build flags EA runtimes and CI pins Temurin `21.0.7+6`.
+- **WiX:** JDK 21's jpackage requires WiX Toolset **3.x** (docs: 3.0 or later); WiX 4/5 support arrived in JDK 24 (JDK-8319457; release note JDK-8333576). CI installs WiX 3.14.1. The Linux JDK has no Windows bundler classes, so this rests on documentation, not inspection.
+- Runtime = jlink of `java.base,java.desktop,java.logging,java.xml,java.prefs,jdk.unsupported,jdk.jfr,jdk.charsets` (56 MB). JavaFX stays an external module path (`lib/fx`), never in the classpath or the runtime image. Models are found through `-Dnotebookai.models=$APPDIR/../models` (explicit `NOTEBOOK_AI_MODELS` still wins; `ModelConfigTest`).
+- `/usr/bin/notebook-ai` and a copyright file are added by repacking jpackage's `.deb` (a symlink cannot be expressed through jpackage options without a maintainer script). Maintainer scripts stay jpackage's plus a read-only shadowing notice; desktop-menu calls made non-fatal.
+- Windows PATH integration is not offered (needs custom WiX); a console launcher `notebook-ai-cli.exe` is added for `--self-check` and CLI use.
+
+### Defects found and fixed
+1. **Model revision pin typo** (recognizer, 41 characters) in both download scripts: the "pinned" URL never worked and the script fell back to `main`. Fixed; verified against the Hub's LFS metadata (MODEL_MANIFEST.md note).
+2. **OpenJFX `jpeg_fx.md`** from the earlier branch snapshot differed from the release tags; replaced by the tag version (all five files identical at 21.0.7+0 and +1).
+3. **jpackage `.deb` maintainer scripts abort and block removal** on systems without desktop menu directories (found by the real apt test in a Debian trixie container): both xdg-desktop-menu calls are now non-fatal and `verifyDeb` enforces it.
+4. jpackage 21 versions the deb exactly `0.1.0` and `--linux-deb-maintainer` takes only an email; Gradle typing (GString) and symlink-handling bugs in my own task.
+
+### Licensing gate (machine-readable: packaging/licensing-status.json; `./gradlew verifyReleaseLicensing` FAILS now)
+- ONNX Runtime LICENSE: **resolved** (MIT text from the official 1.22.0 PyPI artifact, sha256 verified; GitHub repo unreachable from this environment).
+- OpenJFX: **resolved** (release tags). metadata-extractor: **resolved** (Apache-2.0, no NOTICE).
+- xmpcore 6.1.11: **unresolved** (attempted: Maven sources jar 404, drewnoakes/xmp-java 404, Adobe-internal SCM; Adobe's public XMP-Toolkit-SDK is a different product, not substituted).
+- PP-OCRv6 models: **partial** (model cards at the exact commits + PaddleOCR v3.7.0 project license; the model repos contain no LICENSE file and nothing states a grant specific to the weights).
+- Java runtime: license files come from the runtime image's `legal/`; EA runtimes are refused for release builds (flagged internal).
+
+### Verified (Linux x86-64, Kali host)
+`tools/test-deb.sh` 48 passed, 1 skipped (lintian not installed): static inspection, extracted-payload execution with no Java on PATH (self-check, exit codes, override, real OCR through the bundled runtime, real GUI launch mapping the bundled libjvm.so), real-dpkg lifecycle in a private non-root tree.
+**Real apt lifecycle in a Docker `debian:trixie-slim` container (image digest sha256:8aa5a7bf...; user-approved; `--rm`; repo mounted read-only): 16 passed** (install with dependency resolution, command on PATH, self-check with no Java installed, shadow notice, upgrade, remove, purge, user data preserved).
+Regressions: 131 unit tests, installer suites (156 / 114+4 skipped), generator safeguards (16).
+
+### NOT verified
+Everything about the Windows EXE (never built or run): jpackage exe options, WiX build, silent-install switches, per-user registration, upgrade UUID behavior, add-launcher inheritance of java-options, console launcher, SmartScreen. `checkNativeInputWindows` only validates the jpackage input on Linux.
+Ubuntu or any non-trixie release, lintian, GUI inside the container, a signed package, Debian repository signing. CI workflow `native-installers.yml` has not run.
+
+### Shipping blockers
+xmpcore notice (unresolved) and model redistribution (partial); GA runtime (Temurin) not used locally; publisher/maintainer unconfigured; no signing; no app icon; Windows EXE unbuilt/untested.

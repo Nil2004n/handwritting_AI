@@ -532,6 +532,24 @@ Packaged mode of the installers: if `distribution.json` and `app/bin/notebook-ai
 Evidence: `tools/test-dist.sh` (Linux archive end to end, real GUI launch under Xvfb + xfwm4), `tools/test-dist-build.sh` (generator safeguards incl. mutation checks), `tools/test-dist-windows.ps1` (Windows archive content + packaged-mode helper logic under pwsh;
 `[WINDOWS-ONLY]` cmd.exe section never executed). Known licensing gaps are declared in `distribution.json` (`licensingGaps`) and `THIRD-PARTY-NOTICES.txt`.
 
+### Native installers (jpackage)
+
+`gradle/native-installers.gradle` (applied from `build.gradle`; nothing in it runs in the normal build). Inputs are the ZIP pipeline's **validated** payloads (`linux-dist/app`, `win-dist/app`): `stageNativeInput` wipes `build/native/<os>/` and copies the four app jars to `input/`, the three platform JavaFX jars to `content/fx`,
+the models to `content/models`, licenses + notices to `content/legal` (outer ZIP wrappers are never copied). `validateNativeInput` then checks exactly what jpackage will receive (jar sets, ONNX natives for one platform, model checksums, legal documents, forbidden paths). Separate directories for
+input, content, runtime, temp (`work`) and output (`out`) keep old packages out of new ones; final artifacts go to `release-output/` with SHA-256 sidecars.
+
+*Runtime strategy.* `jlink --add-modules java.base,java.desktop,java.logging,java.xml,java.prefs,jdk.unsupported,jdk.jfr,jdk.charsets` from the packaging JDK's `jmods` (56 MB). jdeps gave `java.base,java.desktop,java.logging,javafx.controls`; JavaFX modules declare `java.xml`, `jdk.unsupported`, (static) `jdk.jfr`;
+`jdk.charsets` is defensive (EXIF text). Verified by execution, not by jdeps alone. The runtime's `legal/` directory is required and carried. JavaFX is deliberately **not** linked into the runtime (the Maven jars contain no jmods natives) and is not on the classpath: `--app-content` places it in `lib/fx`, the launcher gets `--module-path $APPDIR/../fx --add-modules javafx.controls`.
+The application stays a classpath application. `ModelConfig.modelsDir`: `NOTEBOOK_AI_MODELS` > `-Dnotebookai.models` > `<cwd>/models` (unit-tested).
+
+*Linux.* `jpackage --type deb`, then a repack (still the jpackage package): `/usr/bin/notebook-ai` symlink and a Debian copyright file owned by the package, regenerated `md5sums`, refreshed `Installed-Size`, a read-only shadowing notice and non-fatal desktop-menu calls in the maintainer scripts. The non-fatal change came from the apt test: jpackage's scripts run `xdg-desktop-menu` under `set -e`,
+which aborts install and **blocks removal** on systems without menu directories. `Depends` = jpackage's `ldd`-derived list (build-host package names) plus the GTK/GL/X11 libraries found by `ldd` on the native libraries hidden inside the JavaFX and ONNX jars. `verifyDeb` validates metadata, contents, natives, models, launcher configuration, maintainer scripts, md5sums and embedded paths.
+
+*Windows.* `packageExe` (Windows host only; WiX 3.x checked on PATH because JDK 21's jpackage supports WiX 3 only - WiX 4/5 support is JDK 24+, JDK-8319457): `--type exe --win-per-user-install --win-menu --win-shortcut-prompt --win-dir-chooser --win-upgrade-uuid <constant> --add-launcher notebook-ai-cli (win-console=true)`.
+The upgrade UUID is a committed constant and must never change. Everything Windows-specific is unexecuted.
+
+*Identity and honesty.* `native-package.json` (inside each package): version, source commit and dirty flag, target, runtime vendor/version/EA flag/modules, licensing state, publisher-configured flag, signing state, `internalBuild` with reasons. Internal builds are allowed; `verifyReleaseLicensing` is the public-release gate.
+
 ### Installer test suites
 
 - `tools/verify-install.sh` (156 checks, `make test-install`): runs the real installer, launcher and Makefile in isolated temporary HOME/PATH environments with fixture distributions (stub start script echoing

@@ -342,6 +342,55 @@ No archive has been published, tagged or released.
 
 ---
 
+## Native installers (.deb and Windows .exe, bundled Java runtime)
+
+jpackage-built installers that **include their own Java runtime**, so end users need no Java. They are separate from the ZIP distributions above
+(which still require Java 21+ and are unchanged). Each is built **on its own OS**; jpackage cannot cross-build.
+
+| | Linux | Windows |
+|---|---|---|
+| Artifact | `release-output/notebook-ai_<ver>_amd64.deb` | `release-output/notebook-ai-<ver>-windows-x64-setup.exe` |
+| Build host | Debian/Ubuntu-family x86-64 | Windows x64 |
+| Build command | `make package-deb` or `./gradlew packageDeb` | `gradlew.bat packageExe` (or `make package-exe` with GNU Make) |
+| Host-native shortcut | `make package-native` / `./gradlew packageNative` (picks this host's type, fails early elsewhere) | same |
+| Prerequisites | JDK 21 **with `jmods`**, `dpkg-deb`, `fakeroot`, `ldd` (`sudo apt-get install dpkg-dev fakeroot binutils`) | JDK 21 with `jmods` + **WiX Toolset 3.x on PATH** (3.14.1; JDK 21's jpackage does not support WiX 4/5) |
+| Also needed first | `make models` (the models are bundled) | `tools\download-models.ps1` |
+| Installs to | `/opt/notebook-ai` (+ `/usr/bin/notebook-ai`, menu entry) | `%LOCALAPPDATA%\notebook-ai` (per user, no Administrator) |
+| Command | `notebook-ai` (system PATH, `/usr/bin`) | GUI: Start Menu / `notebook-ai.exe`; console: `notebook-ai-cli.exe` (e.g. `--self-check`) |
+| Install | `sudo apt install ./notebook-ai_<ver>_amd64.deb` | run the `.exe` (per-user; optional desktop shortcut prompt) |
+| Upgrade | install the newer `.deb` the same way | run the newer `.exe` (stable upgrade UUID, so no duplicate app) |
+| Uninstall | `sudo apt remove notebook-ai` (`purge` too) | Settings > Apps > notebook-ai |
+| Verify | `./gradlew verifyDeb`, `make test-deb` | `gradlew.bat checkNativeInputWindows` (any host: static input check) |
+
+**Bundled runtime.** A `jlink` runtime of the *identified* packaging JDK with `java.base, java.desktop, java.logging, java.xml, java.prefs, jdk.unsupported, jdk.jfr, jdk.charsets`
+(jdeps found `java.base, java.desktop, java.logging`; the rest are JavaFX's declared requirements and defensive additions, validated by running the self-check, real OCR and the GUI). JavaFX stays on the module
+path (`lib/fx`, never the classpath), the four application jars on the classpath, the models in `lib/models`. The launcher passes `-Dnotebookai.models=$APPDIR/../models` (a native launcher cannot set environment variables);
+an explicit `NOTEBOOK_AI_MODELS` still wins. The package never uses `java` from `PATH` or `JAVA_HOME`. The runtime source is never downloaded by this build: it is the JDK named by `-PpackagingJdkHome`, `NBAI_PACKAGING_JDK`,
+`JAVA_HOME` (if it has `jmods`) or the Gradle toolchain, recorded in `lib/legal/native-package.json`. **A build from an early-access runtime (this development machine's Debian JDK is `21.0.11-ea`) is flagged an internal build.**
+CI pins Temurin `21.0.7+6`.
+
+**Publisher fields** are configuration, not invented: `-PpublisherName="..." -PdebMaintainerEmail=...`. Unset values become clearly marked placeholders (`unconfigured@invalid`) and mark the build internal.
+There is no application icon in the repository, so jpackage's default icon is used.
+
+**Debian details.** Maintainer scripts are jpackage's (`xdg-desktop-menu install/uninstall`, made non-fatal) plus a read-only notice if `/usr/local/bin/notebook-ai` or `~/.local/bin/notebook-ai` could shadow `/usr/bin/notebook-ai`.
+They do not touch shell startup files, download, build or launch anything. Dependencies are computed on the build host (Debian/Kali "t64" library names), so build the `.deb` on the distribution family you target; direct JavaFX/GTK needs are added explicitly.
+
+**Signing: nothing is signed.** The `.exe` will trigger Windows SmartScreen/UAC "unknown publisher" prompts until signed; the `.deb` is not signed (apt verifies repository metadata, not a local file). Optional external signing: `-PsignCommand="signtool sign ... {file}"`
+(credentials come from your environment, never from the repository); `native-package.json` records `signed: false` unless that step succeeds.
+
+**License gate.** `packaging/licensing-status.json` is the machine-readable evidence file (shipped inside every package). `./gradlew verifyReleaseLicensing` **fails while any release-blocking item is not `resolved`**, and every native package built meanwhile
+is marked `internalBuild` with the reasons. Currently resolved: ONNX Runtime LICENSE (from the official 1.22.0 release artifact), OpenJFX texts (release tags 21.0.7+0/+1), metadata-extractor (Apache-2.0).
+**Open: xmpcore 6.1.11 (unresolved: no copyright notice obtainable) and the PP-OCRv6 models (partial: model-card + project license, no grant specific to the weights).** Details: `packaging/legal/PROVENANCE.txt`.
+
+**What has actually been verified (Linux x86-64 host, Kali):** the `.deb` builds and validates; extracted-payload execution with no Java on PATH (self-check, exit codes, model override, real OCR through the bundled runtime, a real GUI launch under a private display
+that maps the *bundled* `libjvm.so`); a real-`dpkg` lifecycle in a private non-root tree; and a real **apt** install/upgrade/remove/purge in a throw-away **Debian trixie** container (dependencies resolved by apt, no Java on the machine). **Not verified:** Ubuntu or any other Debian-family release,
+`lintian` (not installed), a GUI inside the container, and **everything about the Windows installer** - the `.exe` has never been built or run (no Windows machine); `checkNativeInputWindows` validates only the jpackage *input*.
+`tools/test-installer-windows.ps1` and the `native-installers` workflow exist for a real Windows runner and have not been run. Silent-install switches of jpackage's EXE and the `add-launcher` option inheritance are assumptions to confirm on first run.
+Windows PATH integration is **not offered** (it would need custom WiX work): add `%LOCALAPPDATA%\notebook-ai` to your user PATH yourself if you want `notebook-ai-cli` in CMD.
+Neither package is ready to ship.
+
+---
+
 ## Configuration
 
 | Setting | Where | Effect |
