@@ -172,7 +172,7 @@ else skip "gradlew / linux-dist not available"; fi
 
 echo "== 10. GUI smoke test (private Xvfb display) - real application execution"
 if command -v Xvfb >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 && command -v xfwm4 >/dev/null 2>&1; then
-    extract "$T/ex6"; X6="$T/ex6/$TOP"; D=:$((70 + $$ % 20))
+    extract "$T/ex6"; X6="$T/ex6/$TOP"; D=:$((100 + $$ % 50))
     Xvfb "$D" -screen 0 1280x800x24 >/dev/null 2>&1 & XPID=$!
     sleep 2
     xfwm4 --display="$D" >/dev/null 2>&1 & WPID=$!
