@@ -58,4 +58,19 @@ class ModelConfigTest {
                 StandardCharsets.UTF_8);
         assertEquals(3, ModelConfig.countRecCharacters(yml));
     }
+
+    @org.junit.jupiter.api.Test
+    void modelsDirPrecedenceIsEnvThenPropertyThenProjectRoot() {
+        java.nio.file.Path root = java.nio.file.Path.of("/some/root");
+        org.junit.jupiter.api.Assertions.assertEquals(java.nio.file.Path.of("/env/models"),
+                ModelConfig.resolveModelsDir(root, "/env/models", "/prop/models"), "explicit environment override wins");
+        org.junit.jupiter.api.Assertions.assertEquals(java.nio.file.Path.of("/prop/models"),
+                ModelConfig.resolveModelsDir(root, null, "/prop/models"));
+        org.junit.jupiter.api.Assertions.assertEquals(java.nio.file.Path.of("/prop/models"),
+                ModelConfig.resolveModelsDir(root, "  ", "/prop/models"), "a blank env var is treated as unset");
+        org.junit.jupiter.api.Assertions.assertEquals(root.resolve("models"),
+                ModelConfig.resolveModelsDir(root, null, null));
+        org.junit.jupiter.api.Assertions.assertEquals(root.resolve("models"),
+                ModelConfig.resolveModelsDir(root, "", ""));
+    }
 }

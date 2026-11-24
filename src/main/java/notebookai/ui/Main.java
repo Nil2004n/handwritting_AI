@@ -34,6 +34,7 @@ public final class Main {
         System.out.println("notebook-ai self-check");
         System.out.println("Java: " + Runtime.version() + " on " + System.getProperty("os.name") + " "
                 + System.getProperty("os.arch"));
+        System.out.println("Java home: " + System.getProperty("java.home"));
         for (String m : new String[] {"javafx.base", "javafx.graphics", "javafx.controls"}) {
             boolean present = ModuleLayer.boot().findModule(m).isPresent();
             System.out.println("JavaFX module " + m + ": " + (present ? "present" : "MISSING"));

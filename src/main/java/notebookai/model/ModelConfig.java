@@ -39,16 +39,26 @@ public final class ModelConfig {
 
     private ModelConfig() {}
 
+    /** System property that points at the models directory (set by the native jpackage launchers, which cannot set env vars). */
+    public static final String MODELS_PROPERTY = "notebookai.models";
+
     /**
-     * Resolves the models directory. {@code NOTEBOOK_AI_MODELS}, when set to
-     * a directory, wins (used by system-wide installs); otherwise the
-     * {@code models} directory under the given project root is used, so
-     * running from a source checkout keeps working unchanged.
+     * Resolves the models directory. Precedence: (1) the {@code NOTEBOOK_AI_MODELS} environment variable, when set -
+     * an explicit user override always wins; (2) the {@code notebookai.models} system property, used by the native
+     * installers (their launcher passes {@code -Dnotebookai.models=$APPDIR/../models}); (3) the {@code models}
+     * directory under the given project root, so running from a source checkout keeps working unchanged.
      */
     public static Path modelsDir(Path projectRoot) {
-        String env = System.getenv("NOTEBOOK_AI_MODELS");
+        return resolveModelsDir(projectRoot, System.getenv("NOTEBOOK_AI_MODELS"), System.getProperty(MODELS_PROPERTY));
+    }
+
+    /** Pure form of {@link #modelsDir} for tests. Blank values count as unset. */
+    static Path resolveModelsDir(Path projectRoot, String env, String property) {
         if (env != null && !env.isBlank()) {
             return Path.of(env);
+        }
+        if (property != null && !property.isBlank()) {
+            return Path.of(property);
         }
         return projectRoot.resolve("models");
     }
