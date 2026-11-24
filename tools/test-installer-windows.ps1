@@ -10,7 +10,9 @@
 #
 #   -Exe          the installer under test (default: release-output\notebook-ai-*-windows-x64-setup.exe, lowest version)
 #   -UpgradeExe   an installer with a HIGHER version, for the upgrade tests (the CI job builds one with -PnativeAppVersion)
-param([string]$Exe, [string]$UpgradeExe)
+#   -SkipStandardUser / -StandardUserOnly   run the main lifecycle without / only the non-Administrator install section (CI runs them as
+#                 separate steps so a problem in the account-creation section can never hide the main results)
+param([string]$Exe, [string]$UpgradeExe, [switch]$StandardUserOnly, [switch]$SkipStandardUser)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 if ($env:NBAI_DISPOSABLE_ENV -ne '1') { Write-Host 'refusing: set NBAI_DISPOSABLE_ENV=1 only on a disposable Windows runner/VM'; exit 2 }
@@ -95,6 +97,7 @@ $Prefs = Join-Path $env:APPDATA 'notebook-ai'; New-Item -ItemType Directory -For
 [IO.File]::WriteAllText((Join-Path $Prefs 'prefs.txt'), 'my preferences')
 T 'before: no notebook-ai is registered on this machine' (@(Get-Registered).Count -eq 0)
 
+if (-not $SkipStandardUser) {
 Write-Host '== 1a. standard-user (NON-Administrator) install: the per-user claim, tested where it can be'
 $stdUser = 'nbaitest'
 try {
@@ -137,6 +140,8 @@ finally {
     Remove-Item -LiteralPath 'C:\Users\Public\nbai-std' -Recurse -Force -ErrorAction SilentlyContinue
 }
 T 'machine is clean again after the standard-user section (nothing registered machine-wide)' (@(Get-Registered).Count -eq 0)
+}
+if ($StandardUserOnly) { Write-Host ''; Write-Host "RESULT: $($script:Pass) passed, $($script:Fail) failed, $($script:Skip) skipped (standard-user section only)"; if ($script:Fail -eq 0) { exit 0 } else { exit 1 } }
 
 Write-Host '== 1. install (per user)'
 $sw = Install-Silently $Exe 'first'

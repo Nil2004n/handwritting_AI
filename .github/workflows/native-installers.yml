@@ -135,11 +135,12 @@ jobs:
           Copy-Item build\native\windows\content\legal\native-package.json build\ci\native-package.json
 
       - name: Installer lifecycle tests (disposable runner)
+        timeout-minutes: 30
         env:
           NBAI_DISPOSABLE_ENV: '1'
         run: |
           $ErrorActionPreference = 'Continue'
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -UpgradeExe "$env:RUNNER_TEMP\upgrade\notebook-ai-0.1.1-windows-x64-setup.exe" *>&1 | Tee-Object -FilePath build\ci\windows-installer-test-report.txt
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -SkipStandardUser -UpgradeExe "$env:RUNNER_TEMP\upgrade\notebook-ai-0.1.1-windows-x64-setup.exe" *>&1 | Tee-Object -FilePath build\ci\windows-installer-test-report.txt
           exit $LASTEXITCODE
 
       - name: Public-release license gate (informational here; EXPECTED to fail while evidence is unresolved)
@@ -181,6 +182,25 @@ jobs:
             build/ci/INTERNAL-BUILD-NOTICE.txt
             build/ci/windows-installer-test-report.txt
             build/ci/verifyReleaseLicensing.log
+          if-no-files-found: warn
+          retention-days: 2
+
+      - name: Standard-user (non-Administrator) install test (separate step, creates a local account)
+        if: ${{ always() }}
+        timeout-minutes: 20
+        env:
+          NBAI_DISPOSABLE_ENV: '1'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -StandardUserOnly *>&1 | Tee-Object -FilePath build\ci\windows-standard-user-test-report.txt
+          exit $LASTEXITCODE
+
+      - name: Upload the standard-user test report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-standard-user-test-report
+          path: build/ci/windows-standard-user-test-report.txt
           if-no-files-found: warn
           retention-days: 2
 
