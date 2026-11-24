@@ -29,9 +29,7 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: native-installers-${{ github.ref }}
-  cancel-in-progress: false
+# No concurrency group on purpose: a hung Windows runner must never queue fresh manual runs behind it (the job timeout still bounds each run).
 
 env:
   # Temurin 21 GA (regular quarterly update, released 2026-10-22). The job FAILS unless the runtime it ends up with really is this version.
