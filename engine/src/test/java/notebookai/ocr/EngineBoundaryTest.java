@@ -11,7 +11,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -22,31 +21,18 @@ import org.junit.jupiter.api.Test;
  */
 class EngineBoundaryTest {
 
-    /** Classes in {@code notebookai.ocr} that are DESKTOP adapters/tools, not engine (everything else there IS the engine). */
-    static final Set<String> DESKTOP_ONLY = Set.of(
-            "OcrService", "DesktopImageIO", "DebugImages", "DebugTrace", "CtcProbe", "CrossCheckDump",
-            "BoundaryFingerprint", "RecognizeCli", "OcrSetup", "OcrSetupCheck");
-
     static final List<String> FORBIDDEN_PREFIXES = List.of(
             "java/awt/", "javax/imageio/", "javax/swing/", "javafx/", "com/drew/", "java/beans/", "java/applet/",
-            "notebookai/ui/", "notebookai/project/", "notebookai/eval/", "notebookai/model/");
+            "java/nio/file/", // keeps the engine usable at Android minSdk 24 without the nio desugaring spec
+            "notebookai/ui/", "notebookai/project/", "notebookai/eval/", "notebookai/model/", "notebookai/desktop/");
 
-    /** Compiled classes of the engine: package notebookai.ocr minus the desktop set. */
+    /** Every compiled class of the engine module (the whole module IS the engine). */
     static List<Path> engineClassFiles() throws IOException {
-        Path dir = Paths.get("").toAbsolutePath().resolve("build/classes/java/main/notebookai/ocr");
-        try (Stream<Path> s = Files.list(dir)) {
+        Path dir = Paths.get("").toAbsolutePath().resolve("build/classes/java/main");
+        try (Stream<Path> s = Files.walk(dir)) {
             List<Path> out = new ArrayList<>();
             for (Path p : (Iterable<Path>) s::iterator) {
-                String n = p.getFileName().toString();
-                if (!n.endsWith(".class")) {
-                    continue;
-                }
-                String top = n.substring(0, n.length() - 6);
-                int dollar = top.indexOf('$');
-                if (dollar >= 0) {
-                    top = top.substring(0, dollar);
-                }
-                if (!DESKTOP_ONLY.contains(top)) {
+                if (p.getFileName().toString().endsWith(".class")) {
                     out.add(p);
                 }
             }
@@ -132,9 +118,16 @@ class EngineBoundaryTest {
 
     @Test
     void theScannerActuallyDetectsDesktopReferences() throws Exception {
-        // Proof that the check has teeth: the desktop adapter MUST trip it.
-        Path adapter = Paths.get("").toAbsolutePath().resolve("build/classes/java/main/notebookai/ocr/DesktopImageIO.class");
-        boolean found = constants(adapter).stream().anyMatch(c -> c.contains("java/awt/") || c.contains("javax/imageio/"));
-        assertTrue(found, "DesktopImageIO references AWT/ImageIO; the scanner must see it");
+        // Proof that the check has teeth: a real JDK AWT class must trip it (read from the JDK, not from this module).
+        try (InputStream in = java.awt.Point.class.getResourceAsStream("Point.class")) {
+            Path tmp = Files.createTempFile("Point", ".class");
+            try {
+                Files.write(tmp, in.readAllBytes());
+                boolean found = constants(tmp).stream().anyMatch(c -> c.contains("java/awt/"));
+                assertTrue(found, "the scanner must see java/awt/ in java.awt.Point");
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        }
     }
 }

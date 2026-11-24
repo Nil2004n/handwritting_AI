@@ -1,0 +1,65 @@
+// notebook-ai OCR engine: platform-neutral Java library (desktop JVM and Android). See docs/ENGINE.md.
+//
+// Self-contained on purpose (no references to the root project) so the Android proof build can include this directory as-is.
+plugins {
+    id 'java-library'
+}
+
+group = 'ai.notebookai'
+if (version == 'unspecified') { version = '0.1.0' }   // the desktop build overrides this with its own version (see root build.gradle)
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // Java 17 bytecode and library API: the ONNX Runtime Android AAR is itself compiled to class version 61, and the Android Gradle
+    // Plugin requires JDK 17+, so 17 is the lowest level that costs nothing. --release makes javac reject any JDK API newer than 17.
+    options.release = 17
+    options.encoding = 'UTF-8'
+    // Inline string concatenation: no invokedynamic StringConcatFactory (one less thing for Android's D8 to desugar).
+    options.compilerArgs += ['-XDstringConcat=inline']
+}
+
+jar {
+    archiveBaseName = 'notebook-ai-engine'
+}
+
+dependencies {
+    // The ONNX Runtime JAVA API only. The native runtime is deliberately NOT a dependency of the engine: each host supplies exactly one:
+    //   desktop JVM: com.microsoft.onnxruntime:onnxruntime:<same version>          (JNI natives for desktop OSes)
+    //   Android:     com.microsoft.onnxruntime:onnxruntime-android:<same version>  (AAR, per-ABI natives)
+    // Both publish the identical ai.onnxruntime Java API. compileOnly keeps either from leaking to consumers transitively.
+    compileOnly 'com.microsoft.onnxruntime:onnxruntime:1.22.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.12.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+    testImplementation 'com.microsoft.onnxruntime:onnxruntime:1.22.0'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+// Dependency boundary, checked on the RESOLVED configurations (not on names): what a consumer receives transitively must be empty, and the
+// compile classpath may contain only the ONNX Runtime Java API.
+tasks.register('verifyEngineDependencies') {
+    group = 'verification'
+    description = 'Fails if the engine would hand a consumer any runtime dependency, or compiles against anything but the ONNX Runtime Java API.'
+    doLast {
+        def runtime = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts*.moduleVersion*.id*.toString()
+        if (runtime) { throw new GradleException("engine runtimeClasspath must be empty (consumers supply the native runtime), but is: ${runtime}") }
+        def compile = configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts*.moduleVersion*.id*.toString().sort()
+        def allowed = ['com.microsoft.onnxruntime:onnxruntime:1.22.0']
+        if (compile != allowed) { throw new GradleException("engine compileClasspath must be exactly ${allowed} but is: ${compile}") }
+        println "engine dependencies OK: runtime=[] compileOnly=${compile}"
+    }
+}
+tasks.named('check') { dependsOn 'verifyEngineDependencies' }

@@ -6,6 +6,10 @@ plugins {
 group = 'ai.notebookai'
 version = '0.1.0'
 
+// Where archives/installers are written. Default: <repo>/release-output (the retained artifacts). Packaging TESTS pass
+// -PreleaseOutputDir=/some/temp/dir so they never touch retained artifacts.
+ext.releaseOutputDir = project.hasProperty('releaseOutputDir') ? new File(project.property('releaseOutputDir').toString()).absoluteFile : new File(rootProject.projectDir, 'release-output')
+
 repositories {
     mavenCentral()
 }
@@ -39,8 +43,15 @@ java {
     }
 }
 
+// The engine subproject follows the application version.
+project(':engine').version = version
+
 dependencies {
-    // ONNX Runtime, CPU execution (includes linux-x64 natives).
+    // The portable OCR engine (engine/): image type, models, pipeline. No desktop dependencies.
+    implementation project(':engine')
+
+    // ONNX Runtime, CPU execution (includes linux-x64 natives). The ENGINE needs only its Java API (compileOnly); this application
+    // supplies the desktop native runtime.
     implementation 'com.microsoft.onnxruntime:onnxruntime:1.22.0'
 
     // JavaFX 21 LTS (explicit platform classifiers; project is non-modular).
@@ -395,6 +406,7 @@ distSpecs.each { String tname, Map spec ->
         dependencies.add(conf.name, "org.openjfx:javafx-${m}:21.0.7:${spec.cls}") { transitive = false }
     }
     dependencies.add(conf.name, 'com.drewnoakes:metadata-extractor:2.19.0')   // pulls xmpcore (pure Java)
+    dependencies.add(conf.name, project(':engine'))                          // first-party engine jar (notebook-ai-engine-<version>.jar)
 
     def trim = tasks.register("trimOnnxRuntime${tname}", Zip) {
         description = "ONNX Runtime jar reduced to the ${spec.ort} natives (one architecture per distribution)."
@@ -608,7 +620,7 @@ distSpecs.each { String tname, Map spec ->
             }
         }
         archiveFileName = "${top}.zip"
-        destinationDirectory = new File(rootProject.projectDir, 'release-output')
+        destinationDirectory = releaseOutputDir
         preserveFileTimestamps = false
         reproducibleFileOrder = true
         doLast {
@@ -638,7 +650,7 @@ tasks.register('cleanDist') {
             if (extra) { throw new GradleException("${d} contains files this build did not generate; not deleting:\n  - " + extra.take(20).join('\n  - ')) }
             d.deleteDir(); println "Removed ${d}"
         }
-        File ro = new File(rootProject.projectDir, 'release-output')
+        File ro = releaseOutputDir
         if (ro.isDirectory()) {
             ro.listFiles().findAll { it.name ==~ /notebook-ai-.+-(linux|windows)-x64\.zip(\.sha256)?/ }.each { it.delete(); println "Removed ${it}" }
             if ((ro.list() ?: []).length == 0) { ro.delete() }

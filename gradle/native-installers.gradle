@@ -293,7 +293,7 @@ done
             def md = java.security.MessageDigest.getInstance('MD5'); f.withInputStream { is -> byte[] b = new byte[65536]; int n; while ((n = is.read(b)) > 0) { md.update(b, 0, n) } }
             md.digest().collect { String.format('%02x', it & 0xff) }.join() + '  ' + rp.toPath().relativize(f.toPath()).toString().replace('\\', '/')
         }.join('\n') + '\n'
-        File finalDir = new File(root, 'release-output'); finalDir.mkdirs()
+        File finalDir = releaseOutputDir; finalDir.mkdirs()
         File built = new File(base, 'out/final.deb')
         runTool(['dpkg-deb', '--root-owner-group', '-b', rp.path, built.path])
         String ver = runTool(['dpkg-deb', '-f', built.path, 'Version']).trim()
@@ -314,7 +314,7 @@ tasks.register('verifyDeb') {
     outputs.upToDateWhen { false }
     doLast {
         requireHost('linux')
-        File out = new File(rootProject.projectDir, 'release-output')
+        File out = releaseOutputDir
         File deb = out.listFiles()?.find { it.name ==~ /notebook-ai_.+_amd64\.deb/ }
         if (deb == null) { throw new GradleException('no notebook-ai_*_amd64.deb in release-output/; run ./gradlew packageDeb') }
         List<String> problems = []
@@ -415,7 +415,7 @@ tasks.register('packageExe') {
         runTool(cmd)
         File raw = new File(base, 'out').listFiles().find { it.name.endsWith('.exe') }
         if (raw == null) { throw new GradleException('jpackage produced no .exe') }
-        File finalDir = new File(root, 'release-output'); finalDir.mkdirs()
+        File finalDir = releaseOutputDir; finalDir.mkdirs()
         File target = new File(finalDir, "notebook-ai-${project.findProperty('nativeAppVersion') ?: project.version}-windows-x64-setup.exe")
         if (target.exists()) { target.delete() }
         java.nio.file.Files.move(raw.toPath(), target.toPath())

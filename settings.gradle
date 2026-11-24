@@ -1,1 +1,4 @@
 rootProject.name = 'notebook-ai'
+
+// The portable OCR engine (pure Java, no AWT/JavaFX/desktop dependency; see docs/ENGINE.md). The root project IS the desktop application.
+include 'engine'
