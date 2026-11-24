@@ -13,11 +13,11 @@ import java.util.UUID;
  * is created with the process's normal default permissions (umask), NOT the owner-only mode of
  * {@link Files#createTempFile}; when a file is being replaced, its existing permissions are kept.
  */
-final class AtomicFiles {
+public final class AtomicFiles {
 
     private AtomicFiles() {}
 
-    static Path createTemp(Path dir, Path target, String prefix) throws IOException {
+    public static Path createTemp(Path dir, Path target, String prefix) throws IOException {
         Path tmp = dir.resolve(prefix + UUID.randomUUID() + ".tmp");
         Files.createFile(tmp); // fails if it exists (random name), default umask permissions
         if (Files.exists(target)) {
@@ -35,7 +35,7 @@ final class AtomicFiles {
     }
 
     /** Plain-language description of an I/O failure while writing into {@code dir}. */
-    static String describe(IOException e, Path dir) {
+    public static String describe(IOException e, Path dir) {
         String where = dir == null ? "the folder" : "the folder \"" + dir + "\"";
         if (e instanceof java.nio.file.AccessDeniedException) {
             return "permission denied: cannot write in " + where;
