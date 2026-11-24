@@ -30,6 +30,8 @@ PLATFORM ?=
 ADD_TO_PATH ?=
 NO_PATH ?=
 REPLACE_LEGACY ?=
+# KEEP_LEGACY=1 makes the default per-user `make install` refuse to replace the command left by the OLD `make install` (the old application files are never deleted either way).
+KEEP_LEGACY ?=
 export PREFIX DESTDIR APP_DIR BIN_DIR DIST MODELS_DIR
 
 # ---- environment detection (explicit; no guessing) ----
@@ -73,7 +75,7 @@ PLAT_FLAG = $(if $(PLATFORM),-PtargetPlatform=$(PLATFORM),)
 INSTALLER = sh install.sh
 MODELS_CMD = sh tools/download-models.sh
 # Values reach install.sh through the environment ("$$VAR" is expanded by the shell, never by make): spaces are safe.
-INSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir "$$DESTDIR",) $(if $(APP_DIR),--app-dir "$$APP_DIR",) $(if $(BIN_DIR),--bin-dir "$$BIN_DIR",) $(if $(DIST),--dist "$$DIST",) $(if $(MODELS_DIR),--models "$$MODELS_DIR",) $(if $(REPLACE_LEGACY),--replace-legacy,)
+INSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir "$$DESTDIR",) $(if $(APP_DIR),--app-dir "$$APP_DIR",) $(if $(BIN_DIR),--bin-dir "$$BIN_DIR",) $(if $(DIST),--dist "$$DIST",) $(if $(MODELS_DIR),--models "$$MODELS_DIR",) $(if $(or $(REPLACE_LEGACY),$(if $(or $(PREFIX),$(KEEP_LEGACY)),,1)),--replace-legacy,)
 UNINSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir "$$DESTDIR",) $(if $(APP_DIR),--app-dir "$$APP_DIR",) $(if $(BIN_DIR),--bin-dir "$$BIN_DIR",) $(if $(REPLACE_LEGACY),--replace-legacy,)
 TEST_INSTALL_CMD = sh tools/verify-install.sh
 endif
@@ -106,7 +108,7 @@ help:
 	@echo "  package-native    the installer type of THIS host   verify-deb   test-deb (no root)   verify-release-licensing (fails while evidence is unresolved)"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
-	@echo "  upgrade           make install + consent to replace the command left by the OLD 'make install' (same as REPLACE_LEGACY=1)"
+	@echo "  upgrade           same as make install (the per-user install already upgrades the command left by the OLD make install; KEEP_LEGACY=1 opts out)"
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
 	@echo "                 Windows: ADD_TO_PATH=1 | NO_PATH=1"
 	@echo "Support: Linux x86-64 + GNU Make 4.x tested; Windows x64 dispatch implemented, untested; MSYS2/Git Bash/Cygwin/NMake unsupported."
@@ -225,8 +227,8 @@ endif
 install: check-env
 	$(INSTALLER) $(INSTALL_ARGS)
 
-# Same as `make install`, but with consent to replace the command (and, for the per-user layout, point it at the new installation) left by the OLD
-# `make install`. Plain `make install` still refuses to do that without consent. The old application files are left in place.
+# Kept as an explicit spelling: the default per-user `make install` now already replaces the command left by the OLD `make install`
+# (system layouts with PREFIX= still require REPLACE_LEGACY=1). The old application files are left in place.
 upgrade: check-env
 	$(MAKE) install REPLACE_LEGACY=1
 
