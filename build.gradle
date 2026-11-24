@@ -198,6 +198,19 @@ tasks.register('evaluate', JavaExec) {
 }
 
 // Phase 3b diagnostic: raw recognizer output + character-aligned error explanation per manifest case.
+tasks.register('boundaryFingerprint', JavaExec) {
+    group = 'verification'
+    description = 'Canonical per-boundary hashes (decode, tensors, geometry, raw text): -Pimages=a.png,b.jpg [-PhashOnly=true]. For before/after refactor comparison.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'notebookai.ocr.BoundaryFingerprint'
+    if (project.hasProperty('hashOnly')) {
+        args '--hash-only'
+    }
+    if (project.hasProperty('images')) {
+        args project.property('images').toString().split(',').toList()
+    }
+}
+
 tasks.register('ctcProbe', JavaExec) {
     group = 'verification'
     description = 'CTC output diagnostics: -PevalManifest=eval/cases.tsv [-PdebugDir=DIR].'
