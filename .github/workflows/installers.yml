@@ -1,0 +1,43 @@
+# Runs the installer test suites on real Linux and real Windows runners.
+# The Windows job is the only place the cmd.exe wrapper, install.cmd and Windows file semantics are exercised.
+# (Added without being run locally: no Windows machine was available when it was written.)
+name: installers
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build, fetch + verify models
+        run: make build models
+      - name: Installer tests (temporary locations only)
+        run: make test-install
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build the Windows distribution
+        shell: cmd
+        run: gradlew.bat installDist
+      - name: Fetch + verify models
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
+      - name: Installer tests (file-backed PATH; the real registry is not touched)
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-install-windows.ps1

@@ -1,0 +1,5 @@
+# Line endings that must survive checkout on any OS (a .cmd/.bat with LF, or a .sh with CRLF, will not run).
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.sh   text eol=lf
+gradlew text eol=lf
