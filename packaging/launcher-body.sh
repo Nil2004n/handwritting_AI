@@ -32,4 +32,14 @@ if [ -z "${NOTEBOOK_AI_MODELS:-}" ]; then
     export NOTEBOOK_AI_MODELS
 fi
 [ -f "$NOTEBOOK_AI_MODELS/det.onnx" ] || nbai_fail "OCR model files were not found in '$NOTEBOOK_AI_MODELS'; $NBAI_HINT"
+# Newer JDKs warn on every start about things this application legitimately does: JDK 23+ about sun.misc.Unsafe (JavaFX's Marlin renderer) and JDK 24+ about
+# restricted native access (JavaFX and ONNX Runtime load their native libraries). The flags below state that this is intended and silence the warnings. They are
+# added ONLY for the JDKs that know them (a JDK 21 rejects --sun-misc-unsafe-memory-access), and any JAVA_OPTS you set yourself are kept.
+NBAI_EXTRA=
+[ "$NBAI_M" -ge 23 ] && NBAI_EXTRA="--sun-misc-unsafe-memory-access=allow"
+[ "$NBAI_M" -ge 24 ] && NBAI_EXTRA="$NBAI_EXTRA --enable-native-access=javafx.graphics,ALL-UNNAMED"
+if [ -n "$NBAI_EXTRA" ]; then
+    JAVA_OPTS="${JAVA_OPTS:-} $NBAI_EXTRA"
+    export JAVA_OPTS
+fi
 exec "$NBAI_START" "$@"

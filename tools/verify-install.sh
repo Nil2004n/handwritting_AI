@@ -44,6 +44,7 @@ mkfix() { # mkfix DIR [TAG] [PLATFORM] : a complete fixture distribution + model
     cat > "$d/dist/bin/notebook-ai" <<'EOS'
 #!/bin/sh
 echo "STUB java_home=${JAVA_HOME:-} models=${NOTEBOOK_AI_MODELS:-}"
+echo "STUBOPTS [${JAVA_OPTS:-}]"
 for a in "$@"; do printf 'ARG[%s]\n' "$a"; done
 exit "${NBAI_STUB_EXIT:-0}"
 EOS
@@ -120,6 +121,14 @@ OUT=$(env -i HOME="$H" PATH="$MINBIN" NOTEBOOK_AI_JDK_FALLBACK=/nonexistent "$CM
 [ "$RC" = 1 ] && has "$OUT" "Java 21 or newer was not found"; t "launcher reports missing Java" $? "$OUT"
 OUT=$(env -i HOME="$H" PATH="$FJ17:$MINBIN" NOTEBOOK_AI_JDK_FALLBACK="$T/j21" "$CMD" x 2>&1); RC=$?
 [ "$RC" = 0 ] && has "$OUT" "java_home=$T/j21"; t "old default Java but a JDK 21 fallback exists: launcher switches JAVA_HOME" $? "$OUT"
+
+for jm in 21 23 24 25; do mkjava "$T/jm$jm" $jm; done
+launch_opts() { env -i HOME="$H" PATH="$T/jm$1/bin:$MINBIN" ${2:+JAVA_OPTS="$2"} NOTEBOOK_AI_JDK_FALLBACK=/nonexistent "$CMD" 2>&1; }
+OUT=$(launch_opts 21); tn "Java 21: no JVM flags are added (it would reject the Unsafe flag)" "$OUT" "--sun-misc-unsafe-memory-access"; tn "Java 21: no native-access flag" "$OUT" "--enable-native-access"
+OUT=$(launch_opts 23); tt "Java 23: the Unsafe flag is added" "$OUT" "--sun-misc-unsafe-memory-access=allow"; tn "Java 23: no native-access flag yet" "$OUT" "--enable-native-access"
+OUT=$(launch_opts 24); tt "Java 24: Unsafe and native-access flags are added" "$OUT" "--sun-misc-unsafe-memory-access=allow --enable-native-access=javafx.graphics,ALL-UNNAMED"
+OUT=$(launch_opts 25); tt "Java 25: Unsafe and native-access flags are added" "$OUT" "--enable-native-access=javafx.graphics,ALL-UNNAMED"
+OUT=$(launch_opts 25 "-Xmx3g"); tt "the user's own JAVA_OPTS are kept in front of the added flags" "$OUT" "STUBOPTS [-Xmx3g --sun-misc-unsafe-memory-access=allow"
 
 echo "== 5. upgrade replaces the whole app, removes stale libs, keeps unrelated files, no temp leftovers"
 newhome; run $(fixargs "$FX"); APP=$H/.local/share/notebook-ai; CMD=$H/.local/bin/notebook-ai
