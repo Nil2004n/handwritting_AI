@@ -1,148 +1,184 @@
-# notebook-ai — install, test and run the offline Java OCR desktop app.
+# notebook-ai — build, test and install tasks. One Makefile, shared target names on Linux and Windows.
 #
-# Recommended flow:
-#   make build models          # as your normal user (compiles, fetches models)
-#   make install               # copies files (rerun with sudo for /usr/local)
-#   sudo make install          # system-wide install (builds nothing as root)
+# SUPPORT MATRIX (what is actually claimed)
+#   GNU Make 4.x + Linux x86-64 + sh ........ TESTED (all targets)
+#   GNU Make    + Windows x64 + cmd.exe ..... dispatch to gradlew.bat / install.cmd is implemented but NOT TESTED
+#   Windows without Make ................... fully supported WITHOUT this file: use install.cmd and gradlew.bat
+#   MSYS2 / Git Bash / Cygwin make, NMake,
+#   PowerShell-as-shell, macOS, BSD ........ UNSUPPORTED: detected and refused with a message
+# Make is OPTIONAL. The installers (install.sh, install.cmd) work without it and own all install logic;
+# this file only dispatches to them and to Gradle. Building and installing are separate steps.
 #
-# Other targets:
-#   make test                  # full clean build + unit tests
-#   make verify                # load ONNX sessions, print I/O metadata
-#   make recognize IMAGE=...   # OCR one image (JPG/PNG)
-#   make install PREFIX=$HOME/.local   # user-local install, no root needed
-#   make uninstall [PREFIX=...]
-#   make system-deps           # apt-install openjdk-21-jre (prompts for sudo)
-#   make run | make clean | make help
+# Typical flow (as your NORMAL user, never sudo / Administrator):
+#   make build models              # compile + stage the distribution; fetch/verify models (network once)
+#   make install                   # per-user install (see install.sh --help for the layout)
+#   make uninstall                 # remove the owned installation
 #
-# Installed layout: $(PREFIX)/lib/notebook-ai/{bin,lib,models},
-# launcher at $(PREFIX)/bin/notebook-ai (ensure it is on PATH).
-# Models are bundled at install time; the app never downloads at runtime.
+# Custom locations (any value, including spaces, is passed through the environment, never re-parsed):
+#   make install APP_DIR=/path/app BIN_DIR=/path/bin          (Linux)
+#   make install APP_DIR=C:\path\Notebook-AI                  (Windows; also ADD_TO_PATH=1 or NO_PATH=1)
+#   make install PREFIX=/usr/local                            (Linux system-wide classic layout; copy only; use sudo)
+#   make build PLATFORM=win-x64                               (stage a Windows distribution, e.g. from Linux)
 
-PREFIX ?= /usr/local
+PREFIX ?=
 DESTDIR ?=
-APP_DIR = $(DESTDIR)$(PREFIX)/lib/notebook-ai
-BIN_DIR = $(DESTDIR)$(PREFIX)/bin
+APP_DIR ?=
+BIN_DIR ?=
+DIST ?=
+MODELS_DIR ?=
+PLATFORM ?=
+ADD_TO_PATH ?=
+NO_PATH ?=
+REPLACE_LEGACY ?=
+export PREFIX DESTDIR APP_DIR BIN_DIR DIST MODELS_DIR
 
-# Gradle itself must run on a JVM it supports (Gradle 8.14: up to Java 24).
-# Pin the daemon JVM when a JDK 21 is present so a Java-25 default — or a
-# sudo environment without the user's ~/.gradle/gradle.properties — never
-# breaks the build with "Unsupported class file major version".
+# ---- environment detection (explicit; no guessing) ----
+NBAI_ENV_ERROR :=
+ifeq ($(origin MAKE_VERSION),undefined)
+NBAI_ENV_ERROR := This Makefile needs GNU Make 4.x (MAKE_VERSION is undefined). On Windows use install.cmd and gradlew.bat directly.
+endif
+ifeq ($(OS),Windows_NT)
+NBAI_HOST := windows
+ifneq ($(strip $(MSYSTEM)$(CYGWIN)$(MSYS)),)
+NBAI_ENV_ERROR := MSYS2 / Git Bash / Cygwin make is not a supported combination here. Use install.cmd and gradlew.bat from a normal Command Prompt.
+endif
+SHELL := cmd.exe
+else
+NBAI_HOST := $(shell uname -s 2>/dev/null)
+ifneq ($(NBAI_HOST),Linux)
+NBAI_ENV_ERROR := Unsupported system '$(NBAI_HOST)'. Supported: Linux x86-64 (tested) and Windows x64 via cmd.exe (untested).
+endif
+endif
+
+# Effective user id; overridable ONLY so tools/verify-install.sh can exercise the root guard without being root.
+CURRENT_UID ?= $(shell id -u 2>/dev/null)
+
+ifeq ($(NBAI_HOST),windows)
+GRADLEW = gradlew.bat
+PLAT_FLAG = $(if $(PLATFORM),-PtargetPlatform=$(PLATFORM),)
+INSTALLER = install.cmd
+MODELS_CMD = powershell -NoProfile -ExecutionPolicy Bypass -File tools/download-models.ps1
+INSTALL_ARGS = $(if $(APP_DIR),--app-dir "%APP_DIR%",) $(if $(DIST),--dist "%DIST%",) $(if $(MODELS_DIR),--models "%MODELS_DIR%",) $(if $(ADD_TO_PATH),--add-to-path,) $(if $(NO_PATH),--no-path,)
+UNINSTALL_ARGS = $(if $(APP_DIR),--app-dir "%APP_DIR%",)
+TEST_INSTALL_CMD = powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-install-windows.ps1
+else
+# Gradle itself must run on a JVM it supports (Gradle 8.14: up to Java 24). Pin the daemon JVM to JDK 21 when
+# present so a newer default Java cannot break the build with "Unsupported class file major version".
 GRADLE_FLAGS :=
 ifneq (,$(wildcard /usr/lib/jvm/java-21-openjdk-amd64))
 GRADLE_FLAGS += -Dorg.gradle.java.home=/usr/lib/jvm/java-21-openjdk-amd64
 endif
-GRADLE = ./gradlew $(GRADLE_FLAGS)
+GRADLEW = ./gradlew $(GRADLE_FLAGS)
+PLAT_FLAG = $(if $(PLATFORM),-PtargetPlatform=$(PLATFORM),)
+INSTALLER = sh install.sh
+MODELS_CMD = sh tools/download-models.sh
+# Values reach install.sh through the environment ("$$VAR" is expanded by the shell, never by make): spaces are safe.
+INSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir "$$DESTDIR",) $(if $(APP_DIR),--app-dir "$$APP_DIR",) $(if $(BIN_DIR),--bin-dir "$$BIN_DIR",) $(if $(DIST),--dist "$$DIST",) $(if $(MODELS_DIR),--models "$$MODELS_DIR",) $(if $(REPLACE_LEGACY),--replace-legacy,)
+UNINSTALL_ARGS = $(if $(PREFIX),--prefix "$$PREFIX",) $(if $(DESTDIR),--destdir "$$DESTDIR",) $(if $(APP_DIR),--app-dir "$$APP_DIR",) $(if $(BIN_DIR),--bin-dir "$$BIN_DIR",) $(if $(REPLACE_LEGACY),--replace-legacy,)
+TEST_INSTALL_CMD = sh tools/verify-install.sh
+endif
 
-.PHONY: help build models test verify recognize run clean install uninstall system-deps check-dist check-models check-not-root
-
-# Effective user id; overridable ONLY so tools/verify-install.sh can exercise the root guard without being root.
-CURRENT_UID ?= $(shell id -u)
+.PHONY: help build models test verify recognize run clean install uninstall status test-install system-deps \
+        check-env check-not-root
 
 help:
-	@echo "Targets: build test verify recognize run clean install uninstall system-deps"
-	@echo "  make build models         compile, stage installDist, fetch models (as user)"
-	@echo "  make test                 clean build + unit tests"
-	@echo "  make verify               ./gradlew verifyOcrSetup"
-	@echo "  make recognize IMAGE=...  OCR one image (JPG/PNG)"
-	@echo "  make install [PREFIX=...] copy staged app + models + launcher"
-	@echo "                            (run 'make build models' first; sudo only for copy)"
-	@echo "  make uninstall [PREFIX=...] remove installed files"
-	@echo "  make system-deps          apt-install openjdk-21-jre (sudo)"
-	@echo "  make run                  launch the JavaFX UI (needs display)"
-	@echo "  make clean                gradle clean"
+	@echo "notebook-ai Makefile (GNU Make). Make is optional: Windows users can use install.cmd and gradlew.bat directly."
+	@echo ""
+	@echo "Targets:"
+	@echo "  build             compile and stage the distribution (gradle installDist); PLATFORM=win-x64 stages Windows"
+	@echo "  models            fetch + verify the OCR models (network needed once)"
+	@echo "  test              clean build + unit tests"
+	@echo "  verify            load the ONNX sessions and print their I/O (gradle verifyOcrSetup)"
+	@echo "  install           install the STAGED build for the current user (never builds; delegates to the installer)"
+	@echo "  uninstall         remove the owned installation (projects and exports are never touched)"
+	@echo "  status            show and verify the installation"
+	@echo "  clean             delete the Gradle build output (build/) only"
+	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
+	@echo ""
+	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
+	@echo "                 Windows: ADD_TO_PATH=1 | NO_PATH=1"
+	@echo "Support: Linux x86-64 + GNU Make 4.x tested; Windows x64 dispatch implemented, untested; MSYS2/Git Bash/Cygwin/NMake unsupported."
+	@echo "Never run build targets as root/Administrator: root-owned build files break later builds."
+	@echo "Detected: host=$(NBAI_HOST) make=$(MAKE_VERSION)"
+	$(if $(NBAI_ENV_ERROR),@echo ENVIRONMENT PROBLEM: $(NBAI_ENV_ERROR),@echo Environment: OK)
+
+check-env:
+ifneq ($(NBAI_ENV_ERROR),)
+	@echo "error: $(NBAI_ENV_ERROR)" 1>&2
+	@exit 1
+else
+	@:
+endif
+
+ifeq ($(NBAI_HOST),windows)
+# `net session` succeeds only in an elevated (Administrator) prompt.
+check-not-root: check-env
+	@net session >nul 2>&1 & if not errorlevel 1 (echo error: refusing to run Gradle as Administrator - open a normal Command Prompt 1>&2 & exit /b 1)
+	@exit /b 0
+else
+# Gradle/download targets must never run as root: they would create root-owned files in this repository
+# (this happened once with `sudo make build`). Only install/uninstall (plain file copies) may need sudo.
+check-not-root: check-env
+	@if [ "$(CURRENT_UID)" = "0" ]; then \
+		echo "error: refusing to run 'make $(MAKECMDGOALS)' as root: it runs Gradle/downloads and would create"; \
+		echo "       root-owned files in this repository. Run it as your normal user:"; \
+		echo "         make build models           # normal user"; \
+		echo "         make install                # per-user install, no sudo"; \
+		echo "         sudo make install PREFIX=/usr/local   # optional system-wide copy (never builds)"; \
+		exit 1; \
+	fi
+endif
 
 build: check-not-root
-	$(GRADLE) installDist
+	$(GRADLEW) $(PLAT_FLAG) installDist
 
 models: check-not-root
-	sh tools/download-models.sh
+	$(MODELS_CMD)
 
 test: check-not-root
-	$(GRADLE) clean build
+	$(GRADLEW) clean build
 
 verify: check-not-root
-	$(GRADLE) verifyOcrSetup
+	$(GRADLEW) verifyOcrSetup
 
 recognize: check-not-root
+ifeq ($(NBAI_HOST),windows)
+	@if "$(IMAGE)"=="" (echo Usage: make recognize IMAGE=C:\path\to.jpg & exit /b 2)
+else
 	@if [ -z "$(IMAGE)" ]; then echo "Usage: make recognize IMAGE=/path/to.jpg"; exit 2; fi
-	$(GRADLE) recognizeImage -Pimage="$(IMAGE)"
+endif
+	$(GRADLEW) recognizeImage -Pimage="$(IMAGE)"
 
 run: check-not-root
-	$(GRADLE) run
+	$(GRADLEW) run
 
+# Deletes the Gradle build output (build/) only. Never touches projects, exports, eval data or models.
 clean: check-not-root
-	$(GRADLE) clean
+	$(GRADLEW) clean
 
-# System Java 21 runtime (explicit opt-in; prompts for sudo).
-system-deps:
+# Installing copies an already staged build. It never builds or downloads, so `sudo make install PREFIX=...`
+# cannot create root-owned build files. All logic (validation, ownership, upgrade, rollback) lives in the installer.
+install: check-env
+	$(INSTALLER) $(INSTALL_ARGS)
+
+uninstall: check-env
+	$(INSTALLER) --uninstall $(UNINSTALL_ARGS)
+
+status: check-env
+	$(INSTALLER) --status $(UNINSTALL_ARGS)
+
+test-install: check-env
+	$(TEST_INSTALL_CMD)
+
+# System Java 21 runtime (explicit opt-in; prompts for sudo). Linux/Debian family only.
+system-deps: check-env
+ifeq ($(NBAI_HOST),windows)
+	@echo "error: system-deps is Linux-only. On Windows install a Java 21+ runtime (e.g. Temurin) yourself." 1>&2
+	@exit 1
+else
 	@if command -v apt-get >/dev/null 2>&1; then \
 		sudo apt-get update && sudo apt-get install -y openjdk-21-jre; \
 	else \
 		echo "No apt-get found. Install a Java 21+ runtime (JRE) manually."; exit 1; \
 	fi
-
-# The staged distribution must already exist (built as the normal user, so
-# `sudo make install` never compiles or downloads anything as root).
-# Gradle-calling targets (build, models, test, verify, recognize, run, clean) must never run as root:
-# they would create root-owned files in this repository (this happened once with `sudo make build`).
-# Only `make install` (a plain file copy, never a build) may need sudo.
-check-not-root:
-	@if [ "$(CURRENT_UID)" = "0" ]; then \
-		echo "error: refusing to run 'make $(MAKECMDGOALS)' as root: it runs Gradle/downloads and would create"; \
-		echo "       root-owned files in this repository. Run it as your normal user:"; \
-		echo "         make build models           # normal user"; \
-		echo "         sudo make install           # copy only (or: make install PREFIX=\$$HOME/.local, no sudo)"; \
-		exit 1; \
-	fi
-
-check-dist:
-	@if [ ! -x build/install/notebook-ai/bin/notebook-ai ]; then \
-		echo "error: staged app missing. Build it first AS YOUR NORMAL USER (do NOT use sudo):"; \
-		echo "         make build models"; \
-		echo "       then run 'make install' again (with sudo only if the prefix needs it)."; \
-		exit 1; \
-	fi
-
-check-models:
-	@if ! (cd models && sha256sum -c checksums.sha256 >/dev/null 2>&1); then \
-		echo "error: models missing or invalid; run 'make models' first (as your normal user)."; \
-		exit 1; \
-	fi
-
-install: check-dist check-models
-	@if [ ! -w "$(DESTDIR)$(PREFIX)" ]; then \
-		echo "error: $(DESTDIR)$(PREFIX) is not writable; rerun with sudo, e.g.:"; \
-		echo "  sudo make install"; \
-		exit 1; \
-	fi
-	@case "$(APP_DIR)" in */lib/notebook-ai) ;; *) echo "error: refusing unsafe APP_DIR '$(APP_DIR)'"; exit 1;; esac
-	rm -rf "$(APP_DIR)/bin" "$(APP_DIR)/lib"   # app-owned dirs only: no stale jars survive an upgrade
-	install -d "$(APP_DIR)/models" "$(BIN_DIR)"
-	cp -r build/install/notebook-ai/bin build/install/notebook-ai/lib "$(APP_DIR)/"
-	cp models/det.onnx models/det.yml models/rec.onnx models/rec.yml \
-		models/checksums.sha256 "$(APP_DIR)/models/"
-	@printf '%s\n' \
-		'#!/bin/sh' \
-		'# notebook-ai launcher (installed by make install).' \
-		'# Uses bundled models unless NOTEBOOK_AI_MODELS overrides them.' \
-		'APP_DIR="$(PREFIX)/lib/notebook-ai"' \
-		'if [ -z "$$NOTEBOOK_AI_MODELS" ]; then' \
-		'  export NOTEBOOK_AI_MODELS="$$APP_DIR/models"' \
-		'fi' \
-		'if [ -z "$$JAVA_HOME" ] && [ -x /usr/lib/jvm/java-21-openjdk-amd64/bin/java ]; then' \
-		'  export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64' \
-		'fi' \
-		'exec "$$APP_DIR/bin/notebook-ai" "$$@"' \
-		> "$(BIN_DIR)/notebook-ai"
-	chmod 755 "$(BIN_DIR)/notebook-ai"
-	@echo "Installed: $(BIN_DIR)/notebook-ai  (ensure $(PREFIX)/bin is on PATH)"
-	@first="$$(command -v notebook-ai 2>/dev/null)"; \
-	if [ -n "$$first" ] && [ "$$first" != "$(BIN_DIR)/notebook-ai" ] && [ -z "$(DESTDIR)" ]; then \
-		echo "WARNING: 'notebook-ai' on your PATH resolves to $$first, NOT the copy just installed."; \
-		echo "         That older copy will keep running. Update or remove it, e.g.:"; \
-		echo "           make install PREFIX=$$(dirname $$(dirname $$first))"; \
-	fi
-
-uninstall:
-	rm -rf "$(APP_DIR)" "$(BIN_DIR)/notebook-ai"
-	@echo "Removed notebook-ai from $(DESTDIR)$(PREFIX)"
+endif
