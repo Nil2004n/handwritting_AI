@@ -61,7 +61,11 @@ CURRENT_UID ?= $(shell id -u 2>/dev/null)
 # `sudo make install` (running as root with no explicit location) is a SYSTEM-WIDE install into /usr/local, replacing the old-layout copy there
 # (exact old structure only). Per-user installs never run as root (they would go into root's home). Copy only: it never builds or downloads, so build
 # first as your normal user (`make build models`). Override with PREFIX=/usr, KEEP_LEGACY=1 (refuse to replace the old copy), or APP_DIR=/BIN_DIR=.
+INSTALL_ENV =
 ifeq ($(CURRENT_UID),0)
+ifeq ($(SYSTEM_ONLY),)
+INSTALL_ENV = NBAI_REFRESH_USER=1  # tells install.sh that the invoking user's per-user install is refreshed right after (so it does not call it "unchanged")
+endif
 ifeq ($(PREFIX)$(APP_DIR)$(BIN_DIR),)
 PREFIX = /usr/local
 ifeq ($(REPLACE_LEGACY)$(KEEP_LEGACY),)
@@ -241,7 +245,7 @@ endif
 # Installing copies an already staged build. It never builds or downloads, so `sudo make install PREFIX=...`
 # cannot create root-owned build files. All logic (validation, ownership, upgrade, rollback) lives in the installer.
 install: check-env
-	$(INSTALLER) $(INSTALL_ARGS)
+	$(INSTALL_ENV) $(INSTALLER) $(INSTALL_ARGS)
 ifeq ($(CURRENT_UID),0)
 ifeq ($(SYSTEM_ONLY),)
 # After a system-wide install through sudo, ALSO refresh the invoking user's own per-user installation (if there is one), run AS THAT USER (never as root), so an

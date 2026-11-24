@@ -62,8 +62,8 @@ FX2=$T/fx2; mkfix "$FX2" v2
 
 N=0
 newhome() { N=$((N+1)); H=$T/home$N; mkdir -p "$H"; }
-inst() { # isolated installer run; reads IPATH FB JH H INSTALLER (and SUDO_USER when a scenario sets it)
-    env -i HOME="$H" PATH="$IPATH" TMPDIR="$T" SHELL=/bin/bash NOTEBOOK_AI_JDK_FALLBACK="$FB" ${JH:+JAVA_HOME=$JH} ${SUDO_USER:+SUDO_USER=$SUDO_USER} \
+inst() { # isolated installer run; reads IPATH FB JH H INSTALLER (and SUDO_USER / NBAI_REFRESH_USER when a scenario sets them)
+    env -i HOME="$H" PATH="$IPATH" TMPDIR="$T" SHELL=/bin/bash NOTEBOOK_AI_JDK_FALLBACK="$FB" ${JH:+JAVA_HOME=$JH} ${SUDO_USER:+SUDO_USER=$SUDO_USER} ${NBAI_REFRESH_USER:+NBAI_REFRESH_USER=$NBAI_REFRESH_USER} \
         sh "${INSTALLER:-$ROOT/install.sh}" "$@"
 }
 run() { OUT=$(inst "$@" 2>&1); RC=$?; }
@@ -208,6 +208,14 @@ tt "it reports the invoking user's per-user installation that this install did n
 tt "...and says how to use only the system-wide one or refresh the per-user one" "$OUT" "sh install.sh --uninstall"
 tn "no bogus warning about root's PATH ('resolves to')" "$OUT" "resolves to"
 [ -e "$SH/.local/bin/notebook-ai" ] && grep -q per-user-app "$SH/.local/bin/notebook-ai"; t "the per-user command was not modified by the root install" $?
+IPATH=$T/fakesudo:$BASEPATH; SUDO_USER=kali; export SUDO_USER; NBAI_REFRESH_USER=1 run --prefix "$H/sysprefix2" $(fixargs); unset SUDO_USER; IPATH=$BASEPATH
+tn "when the per-user install is refreshed right after, it is not called 'unchanged'" "$OUT" "NOT changed by this system-wide install"
+newhome; printf '#!/bin/sh\necho kali\n' > "$T/fakesudo/id-un-unused"
+mkdir -p "$T/asuser"; printf '#!/bin/sh\ncase "$1" in -un) echo kali;; -u) echo 1000;; *) echo 1000;; esac\n' > "$T/asuser/id"; chmod 755 "$T/asuser/id"
+IPATH=$T/asuser:$BASEPATH; SUDO_USER=kali; export SUDO_USER; run $(fixargs); unset SUDO_USER; IPATH=$BASEPATH
+t "per-user install run as the user BY sudo succeeds" $RC "$OUT"
+tn "...and makes no claim that its directory is not on PATH (sudo's PATH is not the user's)" "$OUT" "is not on your PATH"
+tt "...and tells the user how to check in a fresh terminal" "$OUT" "command -v notebook-ai"
 ( eval "$(sed -n '/^system_bin_dir()/p' "$ROOT/install.sh")"; system_bin_dir /usr/local/bin && system_bin_dir /usr/bin && ! system_bin_dir /opt/x/bin ); t "standard system bin directories are not reported as 'not on PATH'" $?
 
 echo "== 10. command shadowing and PATH reporting"

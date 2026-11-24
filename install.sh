@@ -555,10 +555,17 @@ sudo_user_home() {
 
 report_path_and_shadow() {
     resolved=$(command -v notebook-ai 2>/dev/null) || resolved=
+    if [ -n "${SUDO_USER:-}" ] && [ "$(id -un 2>/dev/null)" = "$SUDO_USER" ] && [ "$(id -u 2>/dev/null)" != 0 ]; then
+        # Run as the invoking user BY sudo (sudo -u): PATH is sudo's sanitized one, which says nothing about this user's own shell.
+        info ""
+        info "(PATH was not checked: this run was started through sudo. Open a new terminal and run: command -v notebook-ai)"
+        info "      Run it now with:  $(sq "$CMD_FINAL")"
+        return 0
+    fi
     if SUDO_HOME=$(sudo_user_home); then
         # Running as root via sudo: judge the invoking user's setup, not root's PATH.
         ucmd=$SUDO_HOME/.local/bin/notebook-ai
-        if [ -e "$ucmd" ] && ! [ "$ucmd" -ef "$CMD_FINAL" ] 2>/dev/null; then
+        if [ -z "${NBAI_REFRESH_USER:-}" ] && [ -e "$ucmd" ] && ! [ "$ucmd" -ef "$CMD_FINAL" ] 2>/dev/null; then
             info ""
             if owned_launcher "$ucmd"; then
                 info "NOTE: $SUDO_USER also has a per-user installation ($(launcher_app "$ucmd")) with its own command $ucmd."
