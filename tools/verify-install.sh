@@ -77,7 +77,7 @@ OUT=$(sh "$ROOT/install.sh" --prefix /x --app-dir /y 2>&1); RC=$?; [ "$RC" = 2 ]
 
 echo "== 2. fresh per-user install, run from another directory, repository path with spaces"
 newhome
-RC_DIR="$T/repo copy"; mkdir -p "$RC_DIR/build/install" "$RC_DIR/tools"; cp "$ROOT/install.sh" "$RC_DIR/install.sh"
+RC_DIR="$T/repo copy"; mkdir -p "$RC_DIR/build/install" "$RC_DIR/tools"; cp "$ROOT/install.sh" "$RC_DIR/install.sh"; mkdir -p "$RC_DIR/packaging"; cp "$ROOT/packaging/launcher-body.sh" "$RC_DIR/packaging/launcher-body.sh"
 cp -R "$FX/dist" "$RC_DIR/build/install/notebook-ai"; cp -R "$FX/models" "$RC_DIR/models"
 before=$(snapshot "$RC_DIR")
 OUT=$(cd / && inst_default=1 env -i HOME="$H" PATH="$IPATH" TMPDIR="$T" SHELL=/bin/bash NOTEBOOK_AI_JDK_FALLBACK=/nonexistent sh "$RC_DIR/install.sh" 2>&1); RC=$?
@@ -99,7 +99,9 @@ OUT=$(cd "$T/some where" && env -i HOME="$H" PATH="$IPATH" NBAI_STUB_EXIT=7 "$CM
 tt "arg with a space forwarded intact" "$OUT" "ARG[a b]"; tt "arg with a quote forwarded intact" "$OUT" "ARG[c'd]"
 tt "arg with a dollar not expanded" "$OUT" 'ARG[$x]'; tt "glob arg not expanded" "$OUT" 'ARG[*]'; tt "empty arg forwarded" "$OUT" "ARG[]"; tt "option with space forwarded" "$OUT" "ARG[--flag=v w]"
 tt "models resolved inside the installation (not the cwd or repo)" "$OUT" "models=$APP/models"
-OUT=$(cd / && env -i HOME="$H" PATH="$IPATH" NOTEBOOK_AI_MODELS=/custom/models "$CMD" 2>&1); tt "user NOTEBOOK_AI_MODELS is respected" "$OUT" "models=/custom/models"
+mkdir -p "$T/custom models"; : > "$T/custom models/det.onnx"
+OUT=$(cd / && env -i HOME="$H" PATH="$IPATH" NOTEBOOK_AI_MODELS="$T/custom models" "$CMD" 2>&1); tt "user NOTEBOOK_AI_MODELS is respected" "$OUT" "models=$T/custom models"
+OUT=$(cd / && env -i HOME="$H" PATH="$IPATH" NOTEBOOK_AI_MODELS="$T/no-such-models" "$CMD" 2>&1); RC=$?; [ "$RC" = 1 ] && has "$OUT" "OCR model files were not found"; t "missing models: launcher fails with an actionable message (no silent download)" $? "$OUT"
 sed -n 2p "$CMD" | grep -qx '# notebook-ai-launcher: owned-by=notebook-ai-installer format=1'; t "launcher carries the ownership marker" $?
 grep -q "$RC_DIR" "$CMD" "$APP/INSTALL.info" 2>/dev/null; [ $? -ne 0 ]; t "installed files do not reference the repository/build directory" $?
 
@@ -283,7 +285,7 @@ fi
 echo "== 15. Makefile: delegation, guards, environment detection"
 cd "$ROOT" || exit 2
 newhome
-for tgt in build models test verify run clean; do
+for tgt in build models test verify run clean dist-linux dist-windows dist package verify-dist dist-clean; do
     out=$(make "$tgt" CURRENT_UID=0 GRADLEW='echo GRADLE-INVOKED' MODELS_CMD='echo GRADLE-INVOKED' 2>&1); rc=$?
     if has "$out" "GRADLE-INVOKED"; then bad "make $tgt as root must not reach Gradle"; else [ $rc -ne 0 ]; t "make $tgt refuses as root" $?; fi
 done
@@ -295,6 +297,10 @@ out=$(make build NBAI_HOST=Darwin 2>&1); rc=$?; [ $rc -ne 0 ] && has "$out" "Uns
 out=$(make -n build MSYSTEM=MINGW64 OS=Windows_NT 2>&1); tt "MSYS2/Git Bash make refused (static dry-run text)" "$out" "MSYS2 / Git Bash / Cygwin make is not a supported combination"
 out=$(make -n clean 2>&1); tt "make clean runs only 'gradlew clean' (build output only)" "$out" "clean"; tn "make clean deletes nothing else (no rm)" "$out" "rm "
 out=$(make -n build PLATFORM=win-x64 2>&1); tt "PLATFORM=win-x64 is passed to Gradle explicitly" "$out" "-PtargetPlatform=win-x64"
+out=$(make -n dist-linux 2>&1); tt "dist-linux dispatches to the Gradle task distLinux" "$out" "distLinux"
+out=$(make -n dist-windows 2>&1); tt "dist-windows dispatches to the Gradle task distWindows" "$out" "distWindows"
+out=$(make -n package 2>&1); tt "package dispatches to the Gradle task package" "$out" " package"
+out=$(make -n dist-clean 2>&1); tn "dist-clean uses Gradle cleanDist (no rm in the recipe)" "$out" "rm "
 # STATIC dispatch text only: this is NOT Windows execution
 out=$(make -n build OS=Windows_NT 2>&1); tt "[static] Windows build dispatches to gradlew.bat" "$out" "gradlew.bat"
 out=$(make -n install OS=Windows_NT APP_DIR='C:\x y' ADD_TO_PATH=1 2>&1); tt "[static] Windows install dispatches to install.cmd" "$out" "install.cmd --app-dir"; tt "[static] ADD_TO_PATH becomes --add-to-path" "$out" "--add-to-path"

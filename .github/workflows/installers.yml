@@ -23,6 +23,12 @@ jobs:
         run: make build models
       - name: Installer tests (temporary locations only)
         run: make test-install
+      - name: Generate and package the Linux distribution
+        run: make dist-linux package-linux
+      - name: Distribution generator safeguards
+        run: sh tools/test-dist-build.sh
+      - name: Archive end-to-end test (extract, run, install, delete the package, upgrade, uninstall)
+        run: sh tools/test-dist.sh
 
   windows:
     runs-on: windows-latest
@@ -41,3 +47,9 @@ jobs:
       - name: Installer tests (file-backed PATH; the real registry is not touched)
         shell: cmd
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-install-windows.ps1
+      - name: Generate and package the Windows distribution
+        shell: cmd
+        run: gradlew.bat distWindows packageWindows
+      - name: Archive end-to-end test including the WINDOWS-ONLY cmd.exe section
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-dist-windows.ps1
