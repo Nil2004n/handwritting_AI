@@ -47,8 +47,8 @@
       "declaredLicense": "SCOWL permission notice (MIT-like) plus the notices of its source lists",
       "status": "resolved",
       "releaseBlocking": true,
-      "evidence": "The complete copyright file of the Debian packages (byte-identical across wamerican, wbritish, wcanadian and the -small variants, SHA-256 1d7c0128f6c72d22...) is bundled verbatim; it reproduces the SCOWL notice and the sub-notices (public domain lists, WordNet 1.6 / Princeton University, Ispell / Geoff Kuenning, J Ross Beresford). The lists are shipped unmodified, byte-identical to the Debian packages, with PROVENANCE.txt and SHA256SUMS. The conditions require the notices to accompany copies, which the distribution does. No legal review has been performed.",
-      "files": ["licenses/scowl/SCOWL-COPYRIGHT.txt", "licenses/scowl/PROVENANCE.txt", "licenses/scowl/SHA256SUMS"]
+      "evidence": "The complete copyright file of the Debian packages (byte-identical across wamerican, wbritish, wcanadian and the -small variants, SHA-256 1d7c0128f6c72d22...) is bundled verbatim; it reproduces the SCOWL notice and the sub-notices (public domain lists, WordNet 1.6 / Princeton University, Ispell / Geoff Kuenning, J Ross Beresford). The lists are shipped unmodified, byte-identical to the Debian packages, with PROVENANCE.txt and a checksum list (wordlists.sha256). The conditions require the notices to accompany copies, which the distribution does. No legal review has been performed.",
+      "files": ["licenses/scowl/SCOWL-COPYRIGHT.txt", "licenses/scowl/PROVENANCE.txt", "licenses/scowl/wordlists.sha256"]
     }
   ]
 }

@@ -506,7 +506,8 @@ distSpecs.each { String tname, Map spec ->
             new File(pk, 'legal/models').listFiles().findAll { it.isFile() }.each { new File(lic, 'models/' + it.name).bytes = it.bytes }
             new File(lic, 'scowl').mkdirs()   // word lists bundled in notebookai-spelling-<ver>.jar: the SCOWL notice must accompany them
             File spellDict = new File(root, 'spelling/src/main/resources/notebookai/spelling/dict')
-            ['SCOWL-COPYRIGHT.txt', 'PROVENANCE.txt', 'SHA256SUMS'].each { n -> new File(lic, 'scowl/' + n).bytes = new File(spellDict, n).bytes }
+            ['SCOWL-COPYRIGHT.txt', 'PROVENANCE.txt'].each { n -> new File(lic, 'scowl/' + n).bytes = new File(spellDict, n).bytes }
+            new File(lic, 'scowl/wordlists.sha256').bytes = new File(spellDict, 'SHA256SUMS').bytes   // not named SHA256SUMS: that name is the distribution's own manifest
             new File(lic, 'openjfx').mkdirs()
             new File(pk, 'legal/openjfx').listFiles().findAll { it.isFile() }.each { new File(lic, 'openjfx/' + it.name).bytes = it.bytes }
             def zf = new java.util.zip.ZipFile(trimmedOrt)
