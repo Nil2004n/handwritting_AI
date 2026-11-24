@@ -43,7 +43,7 @@ class OcrEngineTest {
         for (String n : ModelAssets.REQUIRED) {
             bytes.put(n, Files.readAllBytes(MODELS.resolve(n)));
         }
-        try (OcrEngine fromDir = OcrEngine.open(ModelAssets.fromDirectory(MODELS));
+        try (OcrEngine fromDir = OcrEngine.open(ModelAssets.fromDirectory(MODELS.toFile()));
                 OcrEngine fromBytes = OcrEngine.open(ModelAssets.fromBytes(bytes))) {
             OcrResult a = fromDir.recognize(image);
             OcrResult b = fromBytes.recognize(image);
@@ -65,7 +65,7 @@ class OcrEngineTest {
     void closeWaitsForARunningCallAndLaterCallsFailCleanly() throws Exception {
         requireModels();
         PixelImage image = DesktopImageIO.decode(FIXTURE);
-        OcrEngine engine = OcrEngine.open(ModelAssets.fromDirectory(MODELS));
+        OcrEngine engine = OcrEngine.open(ModelAssets.fromDirectory(MODELS.toFile()));
         CompletableFuture<OcrResult> running = CompletableFuture.supplyAsync(() -> {
             try {
                 return engine.recognize(image);

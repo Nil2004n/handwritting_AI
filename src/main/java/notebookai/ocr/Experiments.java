@@ -15,7 +15,7 @@ public final class Experiments {
     /** Recognizer crop padding fraction: 1.0 = upstream unclip padding (default), 0 = core only. */
     public static double cropPad() {
         String v = System.getProperty("notebookai.exp.cropPad");
-        if (v == null || v.isBlank()) {
+        if (v == null || v.trim().isEmpty()) {
             return 1.0;
         }
         return Math.max(0.0, Math.min(1.0, Double.parseDouble(v)));
@@ -24,7 +24,7 @@ public final class Experiments {
     /** CTC prefix beam width; 0 = greedy argmax decoding (default). */
     public static int beamWidth() {
         String v = System.getProperty("notebookai.exp.beam");
-        return v == null || v.isBlank() ? 0 : Math.max(0, Integer.parseInt(v));
+        return v == null || v.trim().isEmpty() ? 0 : Math.max(0, Integer.parseInt(v));
     }
 
     public static boolean any() {

@@ -3,11 +3,12 @@ package notebookai.ocr;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -49,16 +50,19 @@ public final class ModelAssets {
 
     static final String[] REQUIRED = {DET_ONNX, DET_YML, REC_ONNX, REC_YML, CHECKSUMS};
 
-    private final Path directory; // null when backed by bytes
+    private final File directory; // null when backed by bytes
     private final Map<String, byte[]> bytes; // null when backed by a directory
 
-    private ModelAssets(Path directory, Map<String, byte[]> bytes) {
+    private ModelAssets(File directory, Map<String, byte[]> bytes) {
         this.directory = directory;
         this.bytes = bytes;
     }
 
-    /** Model files in {@code directory} (existence is checked by {@link #verify()}, which {@link OcrEngine#open} calls). */
-    public static ModelAssets fromDirectory(Path directory) {
+    /**
+     * Model files in {@code directory} (existence is checked by {@link #verify()}, which {@link OcrEngine#open} calls).
+     * A {@link File} rather than a {@code java.nio.file.Path}: {@code java.io} works on every Android API level without desugaring.
+     */
+    public static ModelAssets fromDirectory(File directory) {
         if (directory == null) {
             throw new IllegalArgumentException("directory is null");
         }
@@ -72,7 +76,7 @@ public final class ModelAssets {
     }
 
     /** The backing directory, or {@code null} for in-memory sets. Desktop diagnostics only. */
-    Path directory() {
+    File directory() {
         return directory;
     }
 
@@ -90,7 +94,7 @@ public final class ModelAssets {
             }
         }
         if (!missing.isEmpty()) {
-            throw new OcrException("OCR setup incomplete: missing model files: " + String.join(", ", missing) + ".");
+            throw new OcrException("OCR setup incomplete: missing model files: " + join(missing) + ".");
         }
         Map<String, String> expected;
         try {
@@ -113,7 +117,7 @@ public final class ModelAssets {
             }
         }
         if (!problems.isEmpty()) {
-            throw new OcrException("OCR setup invalid: checksum problems: " + String.join(", ", problems) + ".");
+            throw new OcrException("OCR setup invalid: checksum problems: " + join(problems) + ".");
         }
     }
 
@@ -138,7 +142,7 @@ public final class ModelAssets {
     OrtSession createSession(OrtEnvironment env, String onnxName) throws OrtException, OcrException {
         try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
             if (directory != null) {
-                return env.createSession(directory.resolve(onnxName).toString(), options);
+                return env.createSession(new File(directory, onnxName).getPath(), options);
             }
             byte[] model = bytes.get(onnxName);
             if (model == null) {
@@ -151,11 +155,21 @@ public final class ModelAssets {
     // ---------------------------------------------------------------- file access
 
     boolean has(String name) {
-        return directory != null ? Files.isRegularFile(directory.resolve(name)) : bytes.containsKey(name);
+        return directory != null ? new File(directory, name).isFile() : bytes.containsKey(name);
     }
 
     private byte[] readAll(String name) throws IOException {
-        return directory != null ? Files.readAllBytes(directory.resolve(name)) : bytes.get(name);
+        if (directory == null) {
+            return bytes.get(name);
+        }
+        try (InputStream in = new FileInputStream(new File(directory, name))) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[1 << 16];
+            for (int n = in.read(buf); n >= 0; n = in.read(buf)) {
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        }
     }
 
     String readText(String name) throws IOException {
@@ -165,7 +179,7 @@ public final class ModelAssets {
     String sha256Hex(String name) throws IOException {
         MessageDigest digest = newDigest();
         if (directory != null) {
-            try (InputStream in = Files.newInputStream(directory.resolve(name))) {
+            try (InputStream in = new FileInputStream(new File(directory, name))) {
                 byte[] buf = new byte[1 << 16];
                 for (int n = in.read(buf); n >= 0; n = in.read(buf)) {
                     digest.update(buf, 0, n);
@@ -175,6 +189,18 @@ public final class ModelAssets {
             digest.update(bytes.get(name));
         }
         return hex(digest.digest());
+    }
+
+    /** {@code String.join(", ", parts)} (that method needs Android API 26). */
+    private static String join(List<String> parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(part);
+        }
+        return sb.toString();
     }
 
     static MessageDigest newDigest() throws IOException {

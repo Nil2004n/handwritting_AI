@@ -58,7 +58,7 @@ public final class OcrService implements AutoCloseable {
             throw new OcrException("Could not read model files: " + e.getMessage(), e);
         }
         // Files and checksums were just verified with the desktop messages; skip the engine's second 31 MB hash pass.
-        return new OcrService(OcrEngine.openVerified(ModelAssets.fromDirectory(modelsDir)), modelsDir);
+        return new OcrService(OcrEngine.openVerified(ModelAssets.fromDirectory(modelsDir.toFile())), modelsDir);
     }
 
     /** Recognizes one image file. Never downloads models; fails cleanly when absent. */

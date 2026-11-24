@@ -57,7 +57,11 @@ public final class CtcDecoder {
             }
             prev = best;
         }
-        String text = String.join("", chars);
+        StringBuilder joined = new StringBuilder();   // String.join needs Android API 26; same result
+        for (String ch : chars) {
+            joined.append(ch);
+        }
+        String text = joined.toString();
         double score = confs.isEmpty() ? 0.0 : confs.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
         return new Line(text, score);
     }

@@ -53,7 +53,7 @@ class ModelAssetsTest {
     void validSetsVerifyFromDirectoryAndFromBytes() throws Exception {
         Map<String, byte[]> f = synthetic();
         write(f);
-        assertDoesNotThrow(() -> ModelAssets.fromDirectory(dir).verify());
+        assertDoesNotThrow(() -> ModelAssets.fromDirectory(dir.toFile()).verify());
         assertDoesNotThrow(() -> ModelAssets.fromBytes(f).verify());
     }
 
@@ -62,7 +62,7 @@ class ModelAssetsTest {
         Map<String, byte[]> f = synthetic();
         write(f);
         Files.write(dir.resolve("rec.onnx"), new byte[] {9, 8, 6});
-        OcrException e = assertThrows(OcrException.class, () -> ModelAssets.fromDirectory(dir).verify());
+        OcrException e = assertThrows(OcrException.class, () -> ModelAssets.fromDirectory(dir.toFile()).verify());
         assertTrue(e.getMessage().contains("rec.onnx (checksum mismatch)"), e.getMessage());
         Map<String, byte[]> g = synthetic();
         g.put("det.onnx", new byte[] {0});
@@ -76,7 +76,7 @@ class ModelAssetsTest {
         f.remove("det.yml");
         f.remove("rec.onnx");
         write(f);
-        OcrException e = assertThrows(OcrException.class, () -> ModelAssets.fromDirectory(dir).verify());
+        OcrException e = assertThrows(OcrException.class, () -> ModelAssets.fromDirectory(dir.toFile()).verify());
         assertTrue(e.getMessage().contains("det.yml") && e.getMessage().contains("rec.onnx"), e.getMessage());
         assertThrows(OcrException.class, () -> ModelAssets.fromBytes(f).verify());
     }
