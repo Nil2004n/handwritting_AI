@@ -79,7 +79,7 @@ jobs:
       - name: Verify the packaging JDK (identity, version, jmods)
         run: |
           $ErrorActionPreference = 'Continue'   # java -version writes to stderr; every result below is asserted explicitly
-          $v = (& java -version 2>&1 | Out-String)
+          $v = (cmd /c 'java -version 2>&1' | Out-String)   # via cmd: no PowerShell error-record noise in the recorded identity
           $v
           if ($v -notmatch 'Temurin') { throw 'the JDK is not Eclipse Temurin' }
           if ($v -notmatch [regex]::Escape($env:EXPECTED_JAVA)) { throw "the JDK is not $env:EXPECTED_JAVA (expected the exact GA build)" }
@@ -109,6 +109,9 @@ jobs:
           $ver = (& (Join-Path $bin 'candle.exe') -? 2>&1 | Select-String -Pattern 'version' | Select-Object -First 1)
           if ("$ver" -notmatch 'version 3\.') { throw "candle.exe is not a WiX 3.x tool: $ver" }
           "WiX: $ver`nWiX source: $how`nWiX bin: $bin" | Tee-Object -FilePath build\ci\wix.txt | Add-Content build\ci\identity.txt
+          # candle.exe -? leaves a non-zero exit code; GitHub's PowerShell wrapper would turn it into this step's status.
+          # The version was asserted explicitly above (a real failure throws), so the leftover native status is reset here.
+          $global:LASTEXITCODE = 0
 
       - name: Models (checksums verified against models/checksums.sha256)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
