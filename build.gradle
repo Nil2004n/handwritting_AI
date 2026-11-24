@@ -212,6 +212,20 @@ tasks.register('evaluate', JavaExec) {
 }
 
 // Phase 3b diagnostic: raw recognizer output + character-aligned error explanation per manifest case.
+// Desktop GUI acceptance of the spelling assistance (real app, real OCR, real backend, isolated per-user data). Needs a display:
+//   xvfb-run -a ./gradlew spellingGuiAcceptance
+tasks.register('spellingGuiAcceptance', JavaExec) {
+    group = 'verification'
+    description = 'Drives the real JavaFX application in-process (use under xvfb-run) and checks the spelling workflow end to end.'
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath.filter { !isJavafxJar(it) }
+    mainClass = 'notebookai.ui.SpellingGuiAcceptance'
+    doFirst {
+        def mp = sourceSets.test.runtimeClasspath.filter { isJavafxModuleJar(it) }.files*.absolutePath.join(File.pathSeparator)
+        jvmArgs '--module-path', mp, '--add-modules', 'javafx.controls'
+    }
+}
+
 tasks.register('boundaryFingerprint', JavaExec) {
     group = 'verification'
     description = 'Canonical per-boundary hashes (decode, tensors, geometry, raw text): -Pimages=a.png,b.jpg [-PhashOnly=true]. For before/after refactor comparison.'

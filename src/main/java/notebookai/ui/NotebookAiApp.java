@@ -101,6 +101,7 @@ public class NotebookAiApp extends Application {
     private Label regionScores;
     private ImageView cropThumb;
     private TextArea transcript;
+    private SpellingPanel spelling;
     private TextArea rawOutput;
     private TextArea selectionOutput;
     private Label selectionKind;
@@ -322,16 +323,20 @@ public class NotebookAiApp extends Application {
             }
             updateControls();
         });
+        transcript.setId("transcript");
+        // Optional, suggestion-first spelling assistance: a panel beside the editor; never edits text by itself, never touches the raw OCR text.
+        spelling = new SpellingPanel(transcript, () -> activePageId, () -> session.epoch());
 
         Label rawLabel = new Label("Raw OCR output (read-only):");
         rawOutput = new TextArea();
+        rawOutput.setId("rawOutput");
         rawOutput.setEditable(false);
         rawOutput.setWrapText(true);
         rawOutput.setPrefRowCount(4);
 
         VBox root = new VBox(8, title, projectLabel, identityLabel, statusLabel, runRow, prepRow, editRow,
                 middle, selectionKind, selectionOutput, selectionTiming, selRow,
-                transcriptLabel, transcript, rawLabel, rawOutput);
+                transcriptLabel, transcript, spelling.node(), rawLabel, rawOutput);
         root.setPadding(new Insets(12));
         VBox.setVgrow(transcript, Priority.ALWAYS);
 
@@ -402,6 +407,10 @@ public class NotebookAiApp extends Application {
 
     @Override
     public void stop() {
+        if (spelling != null) {
+            spelling.close(); // optional spelling work never blocks closing; nothing is delivered after this
+            spelling = null;
+        }
         // Reached only when idle (see requestClose): release the OCR sessions.
         if (sharedService != null) {
             sharedService.close();
@@ -688,8 +697,17 @@ public class NotebookAiApp extends Application {
                 new FileChooser.ExtensionFilter("Images (JPG, PNG)", "*.jpg", "*.jpeg", "*.png"),
                 new FileChooser.ExtensionFilter("JPEG", "*.jpg", "*.jpeg"),
                 new FileChooser.ExtensionFilter("PNG", "*.png"));
-        List<File> files = chooser.showOpenMultipleDialog(stage);
-        if (files == null || files.isEmpty()) {
+        addImageFiles(chooser.showOpenMultipleDialog(stage));
+    }
+
+    /** The part of "Add Images" after the file chooser (also the entry point of the in-process GUI acceptance test). */
+    void addImageFiles(List<File> files) {
+        if (jobRunning || files == null || files.isEmpty()) {
+            return;
+        }
+        int room = ProjectStore.MAX_PAGES - session.project().size();
+        if (room <= 0) {
+            statusLabel.setText("A project holds at most " + ProjectStore.MAX_PAGES + " pages.");
             return;
         }
         List<File> take = files.size() > room ? new ArrayList<>(files.subList(0, room)) : files;
@@ -939,7 +957,11 @@ public class NotebookAiApp extends Application {
         if (f == null) {
             return;
         }
-        java.nio.file.Path path = f.toPath();
+        openProjectFile(f.toPath());
+    }
+
+    /** The part of "Open Project" after the file chooser and the unsaved-changes prompt (also used by the GUI acceptance test). */
+    void openProjectFile(java.nio.file.Path path) {
         // Load fully on a background thread; the active project is replaced only if this succeeds.
         runTask("Opening project…", () -> ProjectStore.load(path), loaded -> {
             session.adopt(loaded, path);
@@ -1011,6 +1033,14 @@ public class NotebookAiApp extends Application {
         if (target == null) {
             return; // cancelled: nothing changes, nothing proceeds
         }
+        saveProjectTo(target, afterSuccess);
+    }
+
+    /** The part of Save/Save As after the target is known (also used by the GUI acceptance test). */
+    void saveProjectTo(java.nio.file.Path target, Runnable afterSuccess) {
+        if (saving) {
+            return;
+        }
         ProjectSession.SaveJob job = session.beginSave(target);
         saving = true;
         updateControls();
@@ -1068,6 +1098,11 @@ public class NotebookAiApp extends Application {
         if (f == null) {
             return;
         }
+        exportCurrentTo(f, number);
+    }
+
+    /** The part of "Export Current Page" after the file chooser (also used by the GUI acceptance test). */
+    void exportCurrentTo(File f, int number) {
         try {
             TextExport.writeUtf8(f.toPath(), TextExport.renderOne(TextExport.pages(session.project()).get(number - 1)));
             statusLabel.setText("Exported page " + number + " to " + f.getName() + " (UTF-8).");
