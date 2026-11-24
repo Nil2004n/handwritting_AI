@@ -543,9 +543,38 @@ do_install() {
 }
 
 on_path() { case ":${PATH:-}:" in *":$1:"*) return 0 ;; esac; return 1; }
+system_bin_dir() { case "$1" in /usr/local/bin|/usr/bin|/bin) return 0 ;; esac; return 1; } # on the PATH of ordinary login shells
+# When this installer runs as root through sudo, PATH is ROOT's (often without the user's directories), so it says nothing about the invoking user's shell.
+# Prints the invoking user's home directory in that case, else fails.
+sudo_user_home() {
+    [ "$(id -u 2>/dev/null)" = 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] || return 1
+    case "$SUDO_USER" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+    uh=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+    [ -n "$uh" ] && [ -d "$uh" ] && printf '%s' "$uh"
+}
 
 report_path_and_shadow() {
     resolved=$(command -v notebook-ai 2>/dev/null) || resolved=
+    if SUDO_HOME=$(sudo_user_home); then
+        # Running as root via sudo: judge the invoking user's setup, not root's PATH.
+        ucmd=$SUDO_HOME/.local/bin/notebook-ai
+        if [ -e "$ucmd" ] && ! [ "$ucmd" -ef "$CMD_FINAL" ] 2>/dev/null; then
+            info ""
+            if owned_launcher "$ucmd"; then
+                info "NOTE: $SUDO_USER also has a per-user installation ($(launcher_app "$ucmd")) with its own command $ucmd."
+            else
+                info "NOTE: $SUDO_USER has another command at $ucmd."
+            fi
+            info "      It was NOT changed by this system-wide install, and when '$SUDO_HOME/.local/bin' comes first on PATH it is the one that runs."
+            info "      To use only the system-wide installation:  sh install.sh --uninstall      (run as $SUDO_USER, without sudo)"
+            info "      To refresh the per-user one instead:        make install               (run as $SUDO_USER, without sudo)"
+        fi
+        if ! system_bin_dir "$BIN_FINAL" && ! on_path "$BIN_FINAL"; then
+            info ""
+            info "NOTE: '$BIN_FINAL' may not be on $SUDO_USER's PATH. Run it with: $(sq "$CMD_FINAL")"
+        fi
+        return 0
+    fi
     if ! on_path "$BIN_FINAL"; then
         info ""
         info "NOTE: '$BIN_FINAL' is not on your PATH, so typing 'notebook-ai' will not find this installation yet."

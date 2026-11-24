@@ -62,8 +62,8 @@ FX2=$T/fx2; mkfix "$FX2" v2
 
 N=0
 newhome() { N=$((N+1)); H=$T/home$N; mkdir -p "$H"; }
-inst() { # isolated installer run; reads IPATH FB JH H INSTALLER
-    env -i HOME="$H" PATH="$IPATH" TMPDIR="$T" SHELL=/bin/bash NOTEBOOK_AI_JDK_FALLBACK="$FB" ${JH:+JAVA_HOME=$JH} \
+inst() { # isolated installer run; reads IPATH FB JH H INSTALLER (and SUDO_USER when a scenario sets it)
+    env -i HOME="$H" PATH="$IPATH" TMPDIR="$T" SHELL=/bin/bash NOTEBOOK_AI_JDK_FALLBACK="$FB" ${JH:+JAVA_HOME=$JH} ${SUDO_USER:+SUDO_USER=$SUDO_USER} \
         sh "${INSTALLER:-$ROOT/install.sh}" "$@"
 }
 run() { OUT=$(inst "$@" 2>&1); RC=$?; }
@@ -197,6 +197,18 @@ IPATH=$BASEPATH; mkdir -p "$T/fakeroot"; printf '#!/bin/sh\necho 0\n' > "$T/fake
 IPATH=$T/fakeroot:$BASEPATH; run $(fixargs); [ "$RC" != 0 ] && has "$OUT" "as root"; t "per-user install refused as root" $? "$OUT"
 run --prefix "$H/rootprefix" --build $(fixargs); [ "$RC" != 0 ] && has "$OUT" "refuses to run Gradle as root"; t "--build refused as root (never runs Gradle as root)" $? "$OUT"
 IPATH=$BASEPATH
+
+echo "== 9b. installing as root through sudo: guidance is about the invoking user, not root's PATH"
+newhome; SH=$H/sudohome; mkdir -p "$SH/.local/bin" "$T/fakesudo"
+printf '#!/bin/sh\n# notebook-ai-launcher: owned-by=notebook-ai-installer format=1\nNBAI_APP='"'"'/somewhere/per-user-app'"'"'\n' > "$SH/.local/bin/notebook-ai"; chmod 755 "$SH/.local/bin/notebook-ai"
+printf '#!/bin/sh\necho 0\n' > "$T/fakesudo/id"; printf '#!/bin/sh\necho "kali:x:1000:1000::%s:/bin/sh"\n' "$SH" > "$T/fakesudo/getent"; chmod 755 "$T/fakesudo/id" "$T/fakesudo/getent"
+IPATH=$T/fakesudo:$BASEPATH; SUDO_USER=kali; export SUDO_USER; run --prefix "$H/sysprefix" $(fixargs); unset SUDO_USER; IPATH=$BASEPATH
+t "system-wide install as root via sudo succeeds" $RC "$OUT"
+tt "it reports the invoking user's per-user installation that this install did not change" "$OUT" "kali also has a per-user installation (/somewhere/per-user-app)"
+tt "...and says how to use only the system-wide one or refresh the per-user one" "$OUT" "sh install.sh --uninstall"
+tn "no bogus warning about root's PATH ('resolves to')" "$OUT" "resolves to"
+[ -e "$SH/.local/bin/notebook-ai" ] && grep -q per-user-app "$SH/.local/bin/notebook-ai"; t "the per-user command was not modified by the root install" $?
+( eval "$(sed -n '/^system_bin_dir()/p' "$ROOT/install.sh")"; system_bin_dir /usr/local/bin && system_bin_dir /usr/bin && ! system_bin_dir /opt/x/bin ); t "standard system bin directories are not reported as 'not on PATH'" $?
 
 echo "== 10. command shadowing and PATH reporting"
 newhome; mkdir -p "$T/shadow"; printf '#!/bin/sh\necho shadow\n' > "$T/shadow/notebook-ai"; chmod 755 "$T/shadow/notebook-ai"
