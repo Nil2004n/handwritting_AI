@@ -91,26 +91,24 @@ tasks.named('run', JavaExec) {
 // of the generated CLASSPATH into MODULE_PATH. Patterns are asserted so a
 // future Gradle template change fails loudly instead of silently shipping
 // classpath JavaFX.
-tasks.named('startScripts') {
-    doLast {
-        File unixScript = new File(project.buildDir, 'scripts/notebook-ai')
-        String unix = unixScript.text
-        String updated = relocateJavafx(unix, ':', '$APP_HOME/lib/', '    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )',
-            '        -classpath "$CLASSPATH" \\')
-        unixScript.text = updated
-
-        File bat = new File(project.buildDir, 'scripts/notebook-ai.bat')
-        String win = bat.text
-        String winUpdated = relocateJavafx(win, ';', '%APP_HOME%\\lib\\', null,
-            '-classpath "%CLASSPATH%"')
-        // Preserve the .bat CRLF line endings.
-        bat.bytes = winUpdated.replace('\n', '\r\n').replace('\r\r\n', '\r\n').bytes
-    }
+// Moves the JavaFX jars of ONE platform classifier from the classpath to --module-path in both start scripts.
+def patchStartScripts = { File dir, String cls ->
+    File unixScript = new File(dir, 'notebook-ai')
+    unixScript.text = relocateJavafx(unixScript.text, ':', '$APP_HOME/lib/', '    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )',
+        '        -classpath "$CLASSPATH" \\', cls)
+    File bat = new File(dir, 'notebook-ai.bat')
+    String winUpdated = relocateJavafx(bat.text, ';', '%APP_HOME%\\lib\\', null, '-classpath "%CLASSPATH%"', cls)
+    // Preserve the .bat CRLF line endings.
+    bat.bytes = winUpdated.replace('\n', '\r\n').replace('\r\r\n', '\r\n').bytes
 }
 
-String relocateJavafx(String script, String sep, String libPrefix, String cygpathAnchor, String classpathAnchor) {
+tasks.named('startScripts') {
+    doLast { patchStartScripts(new File(project.buildDir, 'scripts'), jfxClassifier) }
+}
+
+String relocateJavafx(String script, String sep, String libPrefix, String cygpathAnchor, String classpathAnchor, String cls) {
     List<String> moduleJars = ['javafx-base', 'javafx-graphics', 'javafx-controls'].collect { mod ->
-        def m = script =~ /(\Q${libPrefix}\E${mod}-[^:'";\s]*-${jfxClassifier}\.jar)/
+        def m = script =~ /(\Q${libPrefix}\E${mod}-[^:'";\s]*-${cls}\.jar)/
         if (!m.find()) {
             throw new GradleException("startScripts surgery: expected JavaFX module jar for ${mod} not found")
         }
@@ -238,5 +236,395 @@ tasks.named('installDist') {
     doLast {
         new File(destinationDir, 'PLATFORM').text =
                 "platform=${targetPlatformId}\napp=notebook-ai\nversion=${project.version}\njavafx=21.0.7\nonnxruntime=1.22.0\njava-release=21\n"
+    }
+}
+
+// =====================================================================================================
+// Release distributions: linux-dist/ and win-dist/ (+ archives in release-output/)
+//
+//   ./gradlew distLinux        -> linux-dist/      ./gradlew packageLinux   -> release-output/notebook-ai-<v>-linux-x64.zip
+//   ./gradlew distWindows      -> win-dist/        ./gradlew packageWindows -> release-output/notebook-ai-<v>-windows-x64.zip
+//   ./gradlew dist             -> both             ./gradlew package        -> both archives (from VALIDATED directories only)
+//   ./gradlew verifyDist       -> re-validates the generated directories      ./gradlew cleanDist -> removes generated output
+//
+// Each target resolves its OWN dependency set (JavaFX classifier, ONNX Runtime natives), so both can be produced in
+// one invocation from any host. Cross-assembling is NOT execution verification. Generated into build/dist-staging/,
+// validated, then swapped into place; an existing directory with files this build did not generate is never touched.
+// The default build (build / installDist / test) is unchanged and builds nothing extra.
+// =====================================================================================================
+def distSpecs = [
+    Linux  : [platform: 'linux-x64', os: 'linux',   arch: 'x64', cls: 'linux', dir: 'linux-dist', ort: 'linux-x64', ext: 'sh'],
+    Windows: [platform: 'win-x64',   os: 'windows', arch: 'x64', cls: 'win',   dir: 'win-dist',   ort: 'win-x64',   ext: 'cmd'],
+]
+final String DIST_GENERATOR = 'notebook-ai gradle dist'
+final int DIST_FORMAT = 1
+final String ORT_JAR = 'onnxruntime-1.22.0.jar'
+final List<String> MODEL_FILES = ['det.onnx', 'det.yml', 'rec.onnx', 'rec.yml']
+final List<String> LICENSING_GAPS = [
+    'ONNX Runtime 1.22.0: its own LICENSE text could not be obtained (declared MIT); the jar ships ThirdPartyNotices.txt, which is included',
+    'xmpcore 6.1.11 (transitive): BSD-3-Clause per its POM; no copyright notice text available',
+    'OpenJFX license texts are from a jfx21u repository snapshot (commit dd5bd597dc16...), not from the 21.0.7 release tag',
+    'PP-OCRv6 models: Apache-2.0 declared via model-repository metadata only (no LICENSE file in those repositories)',
+]
+
+def sha256Of = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.withInputStream { is -> byte[] buf = new byte[65536]; int n; while ((n = is.read(buf)) > 0) { md.update(buf, 0, n) } }
+    md.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+def relFiles = { File root ->
+    List<String> out = []
+    root.eachFileRecurse(groovy.io.FileType.FILES) { File f -> out << root.toPath().relativize(f.toPath()).toString().replace('\\', '/') }
+    out.sort()
+    out
+}
+def runGit = { List<String> args ->
+    try {
+        Process pr = new ProcessBuilder(['git'] + args).directory(rootProject.projectDir).redirectErrorStream(true).start()
+        String o = pr.inputStream.text.trim(); pr.waitFor()
+        pr.exitValue() == 0 ? o : null
+    } catch (Exception e) { null }
+}
+// Line endings are normalised while staging, so the result does not depend on how the sources were checked out.
+def asCrlf = { File f -> (f.getText('UTF-8').replaceAll(/\r?\n/, '\r\n')).getBytes('UTF-8') }
+def asLf = { File f -> (f.getText('UTF-8').replace('\r\n', '\n')).getBytes('UTF-8') }
+def setMode = { File f, boolean exec ->
+    try { java.nio.file.Files.setPosixFilePermissions(f.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString(exec ? 'rwxr-xr-x' : 'rw-r--r--')) } catch (Exception ignored) { }
+}
+def zipNatives = { File jar ->
+    Set<String> found = new TreeSet<>()
+    def zf = new java.util.zip.ZipFile(jar)
+    try { zf.entries().each { e -> def m = (e.name =~ /^ai\/onnxruntime\/native\/([^\/]+)\//); if (m.find()) { found << m.group(1) } } } finally { zf.close() }
+    found
+}
+def parseChecksums = { File f ->
+    Map<String, String> m = [:]
+    f.eachLine('UTF-8') { l -> def x = (l =~ /^([0-9a-fA-F]{64})\s+\*?(\S.*)$/); if (x.find()) { m[x.group(2).trim()] = x.group(1).toLowerCase() } }
+    m
+}
+
+// ---- validation (used when staging AND when packaging; operates on any directory) ----
+def validateDist = { File dir, Map spec ->
+    List<String> problems = []
+    def bad = { String m -> problems << m }
+    boolean win = spec.os == 'windows'
+    List<String> required = ['distribution.json', 'SHA256SUMS', 'README.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'app/PLATFORM',
+        'app/lib/notebook-ai-' + project.version + '.jar', 'app/models/checksums.sha256', 'licenses/Apache-2.0.txt', 'licenses/PROVENANCE.txt',
+        'licenses/openjfx/LICENSE', 'licenses/onnxruntime-ThirdPartyNotices.txt', 'licenses/PaddleOCR-LICENSE'] +
+        MODEL_FILES.collect { 'app/models/' + it } +
+        (win ? ['install.cmd', 'uninstall.cmd', 'run-notebook-ai.cmd', 'app/bin/notebook-ai.bat', 'scripts/install-windows.ps1', 'scripts/launcher-body.cmd']
+             : ['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai', 'scripts/launcher-body.sh'])
+    required.each { r -> if (!new File(dir, r).isFile()) { bad("required file missing: $r") } }
+    if (problems) { return problems }
+    List<String> files = relFiles(dir)
+    // checksums: every file listed, every listed file matches, nothing unlisted
+    Map<String, String> sums = parseChecksums(new File(dir, 'SHA256SUMS'))
+    files.findAll { it != 'SHA256SUMS' }.each { f -> if (!sums.containsKey(f)) { bad("file not listed in SHA256SUMS: $f") } }
+    sums.each { f, h -> File x = new File(dir, f); if (!x.isFile()) { bad("SHA256SUMS lists a missing file: $f") } else if (sha256Of(x) != h) { bad("checksum mismatch: $f") } }
+    // metadata matches payload
+    def meta = new groovy.json.JsonSlurper().parse(new File(dir, 'distribution.json'))
+    if (meta.generator != DIST_GENERATOR) { bad('distribution.json: unexpected generator') }
+    if (meta.distributionFormat != DIST_FORMAT) { bad('distribution.json: unexpected distributionFormat') }
+    if (meta.application?.version != project.version.toString()) { bad('distribution.json: version does not match the project version') }
+    if (meta.targetPlatform != spec.platform || meta.target?.os != spec.os || meta.target?.arch != spec.arch) { bad('distribution.json: target does not match the expected platform') }
+    if (String.valueOf(meta.requiredJava) != '21') { bad('distribution.json: requiredJava must be 21') }
+    if (!(meta.source?.commit instanceof String) || meta.source?.dirty == null) { bad('distribution.json: source commit / dirty flag missing') }
+    if (!(meta.licensingGaps instanceof List)) { bad('distribution.json: licensingGaps missing') }
+    if (!new File(dir, 'app/PLATFORM').text.contains('platform=' + spec.platform)) { bad('app/PLATFORM does not declare ' + spec.platform) }
+    Set<String> libs = new File(dir, 'app/lib').listFiles().findAll { it.isFile() }.collect { it.name } as Set
+    Set<String> metaLibs = (meta.libraries ?: []).collect { it.file.toString() } as Set
+    if (libs != metaLibs) { bad("distribution.json libraries differ from app/lib: ${(libs - metaLibs) + (metaLibs - libs)}") }
+    (meta.libraries ?: []).each { l -> File x = new File(dir, 'app/lib/' + l.file); if (x.isFile() && sha256Of(x) != l.sha256) { bad("distribution.json hash differs for lib ${l.file}") } }
+    // models: present, equal to the committed checksums, equal to the metadata
+    Map<String, String> want = parseChecksums(new File(dir, 'app/models/checksums.sha256'))
+    MODEL_FILES.each { m -> if (sha256Of(new File(dir, 'app/models/' + m)) != want[m]) { bad("model checksum mismatch: $m") } }
+    if (!meta.models?.bundled) { bad('distribution.json: models.bundled must be true for this distribution') }
+    (meta.models?.files ?: []).each { mf -> if (want[mf.name] != mf.sha256) { bad("distribution.json model hash differs: ${mf.name}") } }
+    // target-platform dependencies only
+    ['base', 'graphics', 'controls'].each { m -> if (!libs.contains("javafx-${m}-21.0.7-${spec.cls}.jar".toString())) { bad("missing JavaFX ${m} for ${spec.cls}") } }
+    libs.findAll { it.startsWith('javafx-') && !it.endsWith("-${spec.cls}.jar") }.each { bad("JavaFX jar not for ${spec.platform}: $it") }
+    Set<String> nat = zipNatives(new File(dir, 'app/lib/' + ORT_JAR))
+    if (nat != [spec.ort] as Set) { bad("ONNX Runtime natives must be exactly [${spec.ort}] but are $nat") }
+    // nothing that does not belong in a release
+    files.each { f ->
+        if (f =~ /(^|\/)(\.git|\.gradle|__pycache__|src|tests?|build|build-old-rootowned|cand|eval-local|projects-local|exports-local)(\/|$)/) { bad("unexpected path in distribution: $f") }
+        if (f.endsWith('.nbai') || f.endsWith('.class') || f.endsWith('.part') || f.endsWith('.log')) { bad("unexpected file type: $f") }
+    }
+    // no developer-machine paths / build-directory dependencies in scripts, config and docs
+    // Absolute developer paths are forbidden everywhere. The relative source-checkout fallback ('build/install/...') is
+    // allowed ONLY in the three dual-mode installer files (never taken when distribution.json + app/ are present).
+    List<String> absNeedles = [rootProject.projectDir.absolutePath, System.getProperty('user.home'), gradle.gradleUserHomeDir.absolutePath].findAll { it && it.length() > 4 }
+    List<String> buildNeedles = ['/build/install', '\\build\\install', 'build/dist-staging']
+    Set<String> dualMode = ['install.sh', 'install.cmd', 'scripts/install-windows.ps1'] as Set
+    files.findAll { f -> !f.startsWith('licenses/') && (f =~ /\.(sh|cmd|bat|ps1|json|txt|yml|md)$/ || f == 'app/bin/notebook-ai' || f == 'SHA256SUMS' || f == 'LICENSE') }.each { f ->
+        String t = new File(dir, f).getText('UTF-8')
+        absNeedles.each { n -> if (t.contains(n)) { bad("developer-machine path '$n' embedded in $f") } }
+        if (!dualMode.contains(f)) { buildNeedles.each { n -> if (t.contains(n)) { bad("build-directory reference '$n' in $f") } } }
+    }
+    // start script: correct module path for this platform, no classpath JavaFX
+    String start = new File(dir, win ? 'app/bin/notebook-ai.bat' : 'app/bin/notebook-ai').getText('UTF-8')
+    if (!(start =~ /MODULE_PATH=.*javafx-graphics-21\.0\.7-${spec.cls}\.jar/)) { bad('start script has no module path for ' + spec.cls) }
+    if (!start.contains('--add-modules javafx.controls')) { bad('start script does not add javafx.controls') }
+    if (start =~ /CLASSPATH=[^\n]*javafx-/) { bad('start script classpath still contains JavaFX jars') }
+    if (win && !start.contains('\r\n')) { bad('Windows start script lost its CRLF line endings') }
+    if (win) { ['install.cmd', 'uninstall.cmd', 'run-notebook-ai.cmd'].each { c -> if (!new File(dir, c).text.contains('\r\n')) { bad("$c must use CRLF line endings") } } }
+    // executable bits (only checkable on POSIX hosts)
+    if (!win && java.nio.file.FileSystems.default.supportedFileAttributeViews().contains('posix')) {
+        ['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai'].each { e -> if (!new File(dir, e).canExecute()) { bad("not executable: $e") } }
+    }
+    // notices must mention every declared gap
+    String notices = new File(dir, 'THIRD-PARTY-NOTICES.txt').text
+    if (!notices.contains('KNOWN GAPS')) { bad('THIRD-PARTY-NOTICES.txt lacks the known-gaps section') }
+    problems
+}
+
+distSpecs.each { String tname, Map spec ->
+    def conf = configurations.create("dist${tname}Runtime") { canBeConsumed = false; canBeResolved = true }
+    dependencies.add(conf.name, 'com.microsoft.onnxruntime:onnxruntime:1.22.0') { transitive = false }
+    ['base', 'graphics', 'controls'].each { m ->
+        dependencies.add(conf.name, "org.openjfx:javafx-${m}:21.0.7:${spec.cls}") { transitive = false }
+    }
+    dependencies.add(conf.name, 'com.drewnoakes:metadata-extractor:2.19.0')   // pulls xmpcore (pure Java)
+
+    def trim = tasks.register("trimOnnxRuntime${tname}", Zip) {
+        description = "ONNX Runtime jar reduced to the ${spec.ort} natives (one architecture per distribution)."
+        from({ zipTree(conf.files.find { it.name == ORT_JAR }) }) {
+            exclude { FileTreeElement e ->
+                String p = e.relativePath.pathString
+                p.startsWith('ai/onnxruntime/native/') && !p.startsWith("ai/onnxruntime/native/${spec.ort}/")
+            }
+        }
+        archiveFileName = ORT_JAR
+        destinationDirectory = layout.buildDirectory.dir("dist-work/${spec.dir}/ort")
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+
+    def scripts = tasks.register("startScripts${tname}", CreateStartScripts) {
+        description = "Start scripts for ${spec.platform} (JavaFX of that platform on --module-path)."
+        dependsOn tasks.named('jar')
+        outputDir = layout.buildDirectory.dir("dist-work/${spec.dir}/scripts").get().asFile
+        mainClass = 'notebookai.ui.Main'
+        applicationName = 'notebook-ai'
+        classpath = files(tasks.named('jar')) + conf
+        doLast { patchStartScripts(outputDir, spec.cls) }
+    }
+
+    def stage = tasks.register("dist${tname}") {
+        group = 'distribution'
+        description = "Generates ${spec.dir}/ (${spec.platform}) from a clean staging directory. Needs models/ (make models)."
+        dependsOn tasks.named('jar'), trim, scripts
+        outputs.upToDateWhen { false }
+        doLast {
+            File root = rootProject.projectDir
+            File work = layout.buildDirectory.dir('dist-staging').get().asFile
+            File stg = new File(work, "${spec.dir}.new")
+            if (stg.exists()) { stg.deleteDir() }
+            File app = new File(stg, 'app')
+            new File(app, 'lib').mkdirs(); new File(app, 'bin').mkdirs(); new File(app, 'models').mkdirs()
+            boolean win = spec.os == 'windows'
+            String ver = project.version.toString()
+
+            // --- application payload (target platform only)
+            File origOrt = conf.files.find { it.name == ORT_JAR }
+            File trimmedOrt = trim.get().archiveFile.get().asFile
+            conf.files.each { f -> if (f.name != ORT_JAR) { new File(app, 'lib/' + f.name).bytes = f.bytes } }
+            new File(app, 'lib/' + ORT_JAR).bytes = trimmedOrt.bytes
+            File jarFile = tasks.named('jar').get().archiveFile.get().asFile
+            new File(app, 'lib/' + jarFile.name).bytes = jarFile.bytes
+            File scriptsDir = scripts.get().outputDir
+            String startName = win ? 'notebook-ai.bat' : 'notebook-ai'
+            new File(app, 'bin/' + startName).bytes = new File(scriptsDir, startName).bytes
+            new File(app, 'PLATFORM').text = "platform=${spec.platform}\napp=notebook-ai\nversion=${ver}\njavafx=21.0.7\nonnxruntime=1.22.0\njava-release=21\n"
+
+            // --- models (verified against the committed checksums before they are shipped)
+            File mdir = new File(root, 'models')
+            File msum = new File(mdir, 'checksums.sha256')
+            if (!msum.isFile()) { throw new GradleException('models/checksums.sha256 is missing; run: make models') }
+            Map<String, String> want = parseChecksums(msum)
+            List<Map> modelMeta = []
+            MODEL_FILES.each { m ->
+                File mf = new File(mdir, m)
+                if (!mf.isFile()) { throw new GradleException("model file models/$m is missing; run: make models (as your normal user)") }
+                String h = sha256Of(mf)
+                if (h != want[m]) { throw new GradleException("model checksum mismatch for $m; run: make models") }
+                new File(app, 'models/' + m).bytes = mf.bytes
+                modelMeta << [name: m, sha256: h, bytes: mf.length()]
+            }
+            new File(app, 'models/checksums.sha256').bytes = msum.bytes
+
+            // --- legal documents
+            File lic = new File(stg, 'licenses'); lic.mkdirs()
+            File pk = new File(root, 'packaging')
+            new File(lic, 'Apache-2.0.txt').bytes = new File(pk, 'legal/Apache-2.0.txt').bytes
+            new File(lic, 'PROVENANCE.txt').bytes = new File(pk, 'legal/PROVENANCE.txt').bytes
+            new File(lic, 'PaddleOCR-LICENSE').bytes = new File(root, 'third-party/PaddleOCR-LICENSE').bytes
+            new File(lic, 'openjfx').mkdirs()
+            new File(pk, 'legal/openjfx').listFiles().findAll { it.isFile() }.each { new File(lic, 'openjfx/' + it.name).bytes = it.bytes }
+            def zf = new java.util.zip.ZipFile(trimmedOrt)
+            try {
+                def ent = zf.getEntry('ThirdPartyNotices.txt')
+                if (ent == null) { throw new GradleException('ThirdPartyNotices.txt not found inside the ONNX Runtime jar') }
+                new File(lic, 'onnxruntime-ThirdPartyNotices.txt').bytes = zf.getInputStream(ent).bytes
+            } finally { zf.close() }
+            new File(stg, 'LICENSE').bytes = new File(root, 'LICENSE').bytes
+
+            // --- scripts: installer logic is COPIED from the maintained sources (never re-written here)
+            File sdir = new File(stg, 'scripts'); sdir.mkdirs()
+            String commit = runGit(['rev-parse', 'HEAD']) ?: 'unknown'
+            String porcelain = runGit(['status', '--porcelain'])
+            boolean dirty = porcelain == null ? true : !porcelain.isEmpty()
+            String dirtyText = dirty ? 'WORKING TREE HAD UNCOMMITTED CHANGES' : 'clean working tree'
+            Closure fill = { String t -> t.replace('@VERSION@', ver).replace('@ARCH@', spec.arch).replace('@PLATFORM@', spec.platform)
+                .replace('@JFX@', spec.cls).replace('@ORT@', spec.ort).replace('@COMMIT@', commit.take(12)).replace('@DIRTY@', dirtyText) }
+            if (win) {
+                new File(stg, 'install.cmd').bytes = asCrlf(new File(root, 'install.cmd'))
+                new File(stg, 'uninstall.cmd').bytes = asCrlf(new File(pk, 'uninstall.cmd'))
+                new File(sdir, 'install-windows.ps1').bytes = new File(root, 'tools/install-windows.ps1').bytes
+                new File(sdir, 'launcher-body.cmd').bytes = asCrlf(new File(pk, 'launcher-body.cmd'))
+                String frag = new File(pk, 'launcher-body.cmd').text.split(/\r?\n/).findAll { it != '' }.join('\r\n')
+                String head = ['@echo off', 'rem notebook-ai direct-run launcher: runs this extracted distribution in place (no installation).',
+                    'setlocal DisableDelayedExpansion', 'for %%I in ("%~dp0.") do set "NBAI_HERE=%%~fI"',
+                    'set "NBAI_START=%NBAI_HERE%\\app\\bin\\notebook-ai.bat"', 'set "NBAI_MODELS=%NBAI_HERE%\\app\\models"',
+                    'set "NBAI_HINT=extract the archive again"'].join('\r\n')
+                new File(stg, 'run-notebook-ai.cmd').bytes = (head + '\r\n' + frag + '\r\n').getBytes('US-ASCII')
+                new File(stg, 'README.txt').bytes = fill(new File(pk, 'README-windows.txt.in').getText('UTF-8')).replace('\r\n', '\n').replace('\n', '\r\n').getBytes('UTF-8')
+            } else {
+                new File(stg, 'install.sh').bytes = asLf(new File(root, 'install.sh'))
+                new File(stg, 'uninstall.sh').bytes = asLf(new File(pk, 'uninstall.sh'))
+                new File(sdir, 'launcher-body.sh').bytes = asLf(new File(pk, 'launcher-body.sh'))
+                String head = '#!/bin/sh\n# notebook-ai direct-run launcher: runs this extracted distribution in place (no installation).\n' +
+                    'NBAI_HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P) || { echo "run-notebook-ai.sh: cannot resolve its own directory" >&2; exit 1; }\n' +
+                    'NBAI_START=$NBAI_HERE/app/bin/notebook-ai\nNBAI_MODELS=$NBAI_HERE/app/models\nNBAI_HINT="extract the archive again"\n'
+                new File(stg, 'run-notebook-ai.sh').bytes = (head + new String(asLf(new File(pk, 'launcher-body.sh')), 'UTF-8')).getBytes('UTF-8')
+                new File(stg, 'README.txt').text = fill(new File(pk, 'README-linux.txt.in').getText('UTF-8'))
+            }
+            new File(stg, 'THIRD-PARTY-NOTICES.txt').text = fill(new File(pk, 'THIRD-PARTY-NOTICES.txt.in').getText('UTF-8'))
+
+            // --- distribution.json
+            Map pins = [:]
+            new File(root, 'tools/download-models.sh').eachLine { l ->
+                def m = (l =~ /^(DET|REC)_SHA=([0-9a-f]+)$/); if (m.find()) { pins[m.group(1)] = m.group(2) } }
+            List libMeta = new File(app, 'lib').listFiles().findAll { it.isFile() }.sort { it.name }.collect { [file: it.name, sha256: sha256Of(it)] }
+            Map meta = [
+                generator: DIST_GENERATOR, distributionFormat: DIST_FORMAT,
+                application: [name: 'notebook-ai', version: ver],
+                target: [os: spec.os, arch: spec.arch, platform: spec.platform], targetPlatform: spec.platform,
+                requiredJava: 21, javaRuntimeBundled: false,
+                javafx: [version: '21.0.7', classifier: spec.cls], onnxruntime: [version: '1.22.0', nativesIncluded: [spec.ort]],
+                source: [commit: commit, dirty: dirty],
+                generatedUtc: java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString(),
+                nativeTrimming: [onnxruntimeJar: [originalSha256: sha256Of(origOrt), trimmedSha256: sha256Of(trimmedOrt), keptNatives: spec.ort]],
+                libraries: libMeta,
+                models: [bundled: true, identity: 'PP-OCRv6_small (PaddleOCR detector + recognizer, ONNX)', files: modelMeta,
+                         license: 'Apache-2.0 (declared by the model repositories)',
+                         upstream: [[repo: 'PaddlePaddle/PP-OCRv6_small_det_onnx', commit: pins['DET']], [repo: 'PaddlePaddle/PP-OCRv6_small_rec_onnx', commit: pins['REC']]]],
+                licensingGaps: LICENSING_GAPS,
+                reproducibleBuild: 'not claimed',
+            ]
+            new File(stg, 'distribution.json').text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(meta)) + '\n'
+
+            // --- permissions, then SHA256SUMS over every shipped file except itself (stable order)
+            relFiles(stg).each { f -> setMode(new File(stg, f), false) }
+            (win ? [] : ['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai']).each { setMode(new File(stg, it), true) }
+            List<String> sumLines = relFiles(stg).collect { f -> sha256Of(new File(stg, f)) + '  ' + f }
+            new File(stg, 'SHA256SUMS').text = sumLines.join('\n') + '\n'
+            setMode(new File(stg, 'SHA256SUMS'), false)
+
+            // --- validate the staged tree BEFORE it replaces anything
+            List<String> problems = validateDist(stg, spec)
+            if (problems) { throw new GradleException("Staged ${spec.dir} failed validation; nothing was replaced:\n  - " + problems.join('\n  - ')) }
+
+            // --- replace the generated directory, never one with files this build did not generate
+            File fin = new File(root, spec.dir)
+            File replaced = null
+            if (fin.exists()) {
+                File dj = new File(fin, 'distribution.json')
+                boolean empty = fin.isDirectory() && (fin.list() ?: []).length == 0
+                if (!empty) {
+                    def old = dj.isFile() ? new groovy.json.JsonSlurper().parse(dj) : null
+                    if (old == null || old.generator != DIST_GENERATOR || !new File(fin, 'SHA256SUMS').isFile()) {
+                        throw new GradleException("${fin} exists and was not generated by this build; refusing to modify it. Move or remove it yourself.")
+                    }
+                    Set<String> known = parseChecksums(new File(fin, 'SHA256SUMS')).keySet() + ['SHA256SUMS']
+                    List<String> extra = relFiles(fin).findAll { !known.contains(it) }
+                    if (extra) { throw new GradleException("${fin} contains files this build did not generate (not deleted):\n  - " + extra.take(20).join('\n  - ')) }
+                    replaced = new File(work, "replaced/${spec.dir}-${System.currentTimeMillis()}")
+                    replaced.parentFile.mkdirs()
+                    java.nio.file.Files.move(fin.toPath(), replaced.toPath())
+                } else { fin.delete() }
+            }
+            try { java.nio.file.Files.move(stg.toPath(), fin.toPath()) }
+            catch (Exception e) {
+                if (replaced != null && !fin.exists()) { java.nio.file.Files.move(replaced.toPath(), fin.toPath()) }
+                throw new GradleException("could not put ${spec.dir} in place; the previous one was restored: ${e.message}")
+            }
+            if (replaced != null) { replaced.deleteDir() }
+            println "Generated ${fin}  (${spec.platform}, ${relFiles(fin).size()} files)"
+        }
+    }
+
+    def verify = tasks.register("verifyDist${tname}") {
+        group = 'verification'
+        description = "Re-validates ${spec.dir}/ (files, checksums, metadata, platform dependencies, embedded paths)."
+        outputs.upToDateWhen { false }
+        doLast {
+            File d = new File(rootProject.projectDir, spec.dir)
+            if (!d.isDirectory()) { throw new GradleException("${d} does not exist; run: ./gradlew dist${tname}") }
+            List<String> problems = validateDist(d, spec)
+            if (problems) { throw new GradleException("${spec.dir} is NOT valid:\n  - " + problems.join('\n  - ')) }
+            println "${spec.dir}: valid (${relFiles(d).size()} files)"
+        }
+    }
+
+    tasks.register("package${tname}", Zip) {
+        group = 'distribution'
+        description = "Archive of the validated ${spec.dir}/ in release-output/."
+        dependsOn verify
+        String top = "notebook-ai-${project.version}-${spec.os}-${spec.arch}"
+        from(new File(rootProject.projectDir, spec.dir)) {
+            into top
+            if (spec.os != 'windows') {
+                filesMatching(['install.sh', 'uninstall.sh', 'run-notebook-ai.sh', 'app/bin/notebook-ai']) {
+                    permissions { unix('rwxr-xr-x') }
+                }
+            }
+        }
+        archiveFileName = "${top}.zip"
+        destinationDirectory = new File(rootProject.projectDir, 'release-output')
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+        doLast {
+            File z = archiveFile.get().asFile
+            new File(z.parentFile, z.name + '.sha256').text = sha256Of(z) + '  ' + z.name + '\n'
+        }
+    }
+}
+
+tasks.register('dist') { group = 'distribution'; description = 'Generates linux-dist/ and win-dist/.'; dependsOn 'distLinux', 'distWindows' }
+tasks.register('verifyDist') { group = 'verification'; description = 'Validates both generated distribution directories.'; dependsOn 'verifyDistLinux', 'verifyDistWindows' }
+tasks.register('package') { group = 'distribution'; description = 'Creates both release archives (only from validated directories).'; dependsOn 'packageLinux', 'packageWindows' }
+
+// Removes only output generated by this build: directories carrying our distribution.json (and no foreign files) and our archives.
+tasks.register('cleanDist') {
+    group = 'distribution'
+    description = 'Deletes linux-dist/, win-dist/ and the release archives this build generated (never other files).'
+    doLast {
+        distSpecs.each { String tname, Map spec ->
+            File d = new File(rootProject.projectDir, spec.dir)
+            if (!d.exists()) { return }
+            File dj = new File(d, 'distribution.json')
+            def old = dj.isFile() ? new groovy.json.JsonSlurper().parse(dj) : null
+            if (old == null || old.generator != DIST_GENERATOR) { throw new GradleException("${d} was not generated by this build; not deleting it.") }
+            Set<String> known = parseChecksums(new File(d, 'SHA256SUMS')).keySet() + ['SHA256SUMS']
+            List<String> extra = relFiles(d).findAll { !known.contains(it) }
+            if (extra) { throw new GradleException("${d} contains files this build did not generate; not deleting:\n  - " + extra.take(20).join('\n  - ')) }
+            d.deleteDir(); println "Removed ${d}"
+        }
+        File ro = new File(rootProject.projectDir, 'release-output')
+        if (ro.isDirectory()) {
+            ro.listFiles().findAll { it.name ==~ /notebook-ai-.+-(linux|windows)-x64\.zip(\.sha256)?/ }.each { it.delete(); println "Removed ${it}" }
+            if ((ro.list() ?: []).length == 0) { ro.delete() }
+        }
     }
 }

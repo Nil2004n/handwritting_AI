@@ -1,0 +1,63 @@
+Notebook-AI @VERSION@  -  Windows (@ARCH@) distribution
+=======================================================
+
+Offline handwritten-text OCR for the desktop: open photos or scans, prepare them (rotate / straighten / crop),
+extract the text, review and correct it, keep many pages in one project file, export UTF-8 text.
+Nothing leaves your machine: there is no network access at run time.
+
+*** STATUS: this Windows distribution has been assembled and statically verified, but it has NOT yet been
+*** executed on a real Windows machine by its maintainers. Treat it as a test build until that is done.
+
+WHAT THIS PACKAGE CONTAINS
+  app\            the application (JavaFX 21 and ONNX Runtime for Windows x64 only) and the OCR models
+                  (PP-OCRv6_small detector + recognizer, Apache-2.0) - everything needed to run OCR offline
+  install.cmd     per-user installer           uninstall.cmd   removes what install.cmd installed
+  run-notebook-ai.cmd   run in place, without installing
+  scripts\ licenses\ LICENSE THIRD-PARTY-NOTICES.txt   helpers + legal documents
+  distribution.json  SHA256SUMS             metadata and checksums of every shipped file
+
+WHAT YOU MUST INSTALL YOURSELF (not included)
+  * Java 21 or newer (a JRE is enough), on PATH or via JAVA_HOME. No Java runtime is bundled. Check:  java -version
+  * Windows PowerShell 5.1 or newer (part of Windows 10/11) - used by the installer only.
+  Supported: Windows x64 only. ARM64 and 32-bit Windows are not supported.
+
+STEP 1 - EXTRACT
+  Extract the whole ZIP (right-click > Extract All...). Do not run files from inside the ZIP viewer.
+  Spaces in the path are fine. Optional integrity check of the archive:
+      certutil -hashfile notebook-ai-@VERSION@-windows-@ARCH@.zip SHA256   (compare with the .sha256 file)
+
+STEP 2a - JUST RUN IT (no installation)
+  run-notebook-ai.cmd
+  Works from any directory, checks your Java version, writes nothing into this folder.
+  Self-test without a window:   run-notebook-ai.cmd --self-check
+
+STEP 2b - INSTALL FOR YOUR USER (no Administrator rights)
+  install.cmd --add-to-path
+  Installs to   %LOCALAPPDATA%\Programs\Notebook-AI   with the command   %LOCALAPPDATA%\Programs\Notebook-AI\bin\notebook-ai.cmd
+  --add-to-path is your explicit consent to add that bin folder to YOUR user PATH (existing entries are kept).
+  Without it nothing on PATH changes and the exact command path is printed. Open a NEW Command Prompt afterwards,
+  then type:   notebook-ai
+  The installed command keeps working if you move or delete this extracted folder. Options: install.cmd --help
+  The installer refuses to run from an elevated (Administrator) prompt. It does not change any PowerShell
+  execution policy (it uses a process-scoped bypass for its own script only).
+
+UPGRADE
+  Extract the new ZIP and run its install.cmd again. The old installation is replaced as a whole and restored if
+  anything fails. If Notebook-AI is running, close it first (Windows locks its files). Your projects (.nbai) are never touched.
+
+UNINSTALL
+  uninstall.cmd             (same --app-dir option as you installed with)
+  Removes only the installation owned by the installer, and a PATH entry only if install.cmd added it.
+  Your projects, exports and other programs stay.
+
+IF SOMETHING GOES WRONG
+  "Java 21 or newer is required"  -> install Java 21+ or set JAVA_HOME.
+  "failed its SHA256SUMS integrity check" -> extract the ZIP again.
+  'notebook-ai' is not recognized -> PATH was not changed or the window is old: open a NEW Command Prompt,
+      or run install.cmd --add-to-path, or use the full path printed by the installer.
+
+LICENSES
+  Notebook-AI is BSD 3-Clause (LICENSE). Third-party components and their licenses are listed in
+  THIRD-PARTY-NOTICES.txt; the texts are in licenses\. Please read the "known gaps" section there.
+
+Built from source commit @COMMIT@ (@DIRTY@).

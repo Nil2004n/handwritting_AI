@@ -1,0 +1,62 @@
+Notebook-AI @VERSION@  -  Linux (@ARCH@) distribution
+=====================================================
+
+Offline handwritten-text OCR for the desktop: open photos or scans, prepare them (rotate / straighten / crop),
+extract the text, review and correct it, keep many pages in one project file, export UTF-8 text.
+Nothing leaves your machine: there is no network access at run time.
+
+WHAT THIS PACKAGE CONTAINS
+  app/           the application (JavaFX 21 and ONNX Runtime for Linux x86-64 only) and the OCR models
+                 (PP-OCRv6_small detector + recognizer, Apache-2.0) - everything needed to run OCR offline
+  install.sh     per-user installer          uninstall.sh   removes what install.sh installed
+  run-notebook-ai.sh   run in place, without installing
+  scripts/ licenses/ LICENSE THIRD-PARTY-NOTICES.txt   helper + legal documents
+  distribution.json  SHA256SUMS            metadata and checksums of every shipped file
+
+WHAT YOU MUST INSTALL YOURSELF (not included)
+  * Java 21 or newer (a JRE is enough). No Java runtime is bundled. Check with:  java -version
+      Debian/Ubuntu/Kali:  sudo apt-get install openjdk-21-jre
+  * A graphical desktop session (X11 or Wayland/XWayland) to open the window.
+  * Standard Unix tools used by the start scripts (sh, sed, uname, xargs): present on any normal Linux system.
+  Supported: Linux x86-64 only. Other systems/architectures (ARM, macOS, Windows) need their own distribution.
+
+STEP 1 - EXTRACT
+  Extract the archive anywhere you like (spaces in the path are fine). If your extraction tool dropped the
+  executable bits, restore them:      chmod +x install.sh uninstall.sh run-notebook-ai.sh app/bin/notebook-ai
+  Optional integrity check of the archive itself:   sha256sum -c notebook-ai-@VERSION@-linux-@ARCH@.zip.sha256
+
+STEP 2a - JUST RUN IT (no installation)
+  ./run-notebook-ai.sh
+  It works from any current directory, checks your Java version, and writes nothing into this folder.
+  Headless self-test (no window):   ./run-notebook-ai.sh --self-check
+
+STEP 2b - INSTALL FOR YOUR USER (no sudo needed)
+  ./install.sh
+  Installs to   ${XDG_DATA_HOME:-$HOME/.local/share}/notebook-ai   with the command   $HOME/.local/bin/notebook-ai
+  The installer verifies SHA256SUMS first, prints where everything went, and tells you if ~/.local/bin is not
+  on your PATH (it never edits your shell startup files). Then run:   notebook-ai
+  The installed command keeps working if you move or delete this extracted folder.
+  Other locations:   ./install.sh --app-dir DIR --bin-dir DIR      ./install.sh --help
+  System-wide copy (needs sudo, not used by default):   sudo ./install.sh --prefix /usr/local
+
+UPGRADE
+  Extract the new archive and run its ./install.sh again. The old installation is replaced as a whole (no stale
+  files are mixed in) and restored automatically if anything fails. Your projects (.nbai) are never touched.
+
+UNINSTALL
+  ./uninstall.sh            (same --app-dir/--bin-dir/--prefix options as you installed with)
+  Removes only the installation owned by the installer. Your projects, exports and other programs stay.
+  If you deleted this folder: remove  ${XDG_DATA_HOME:-$HOME/.local/share}/notebook-ai  and
+  $HOME/.local/bin/notebook-ai  yourself, or extract the same version again and run ./uninstall.sh.
+
+IF SOMETHING GOES WRONG
+  "Java 21 or newer is required"  -> install Java 21+ or point JAVA_HOME at it.
+  "failed its SHA256SUMS integrity check" -> the extraction is damaged; extract the archive again.
+  "notebook-ai: command not found" after installing -> add the printed directory to your PATH, open a new terminal.
+  An older notebook-ai earlier on PATH -> the installer names it and prints the full path of the new one.
+
+LICENSES
+  Notebook-AI is BSD 3-Clause (LICENSE). Third-party components and their licenses are listed in
+  THIRD-PARTY-NOTICES.txt; the texts are in licenses/. Please read the "known gaps" section there.
+
+Built from source commit @COMMIT@ (@DIRTY@).

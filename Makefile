@@ -79,6 +79,7 @@ TEST_INSTALL_CMD = sh tools/verify-install.sh
 endif
 
 .PHONY: help build models test verify recognize run clean install uninstall status test-install system-deps \
+        dist dist-linux dist-windows verify-dist package package-linux package-windows dist-clean test-dist \
         check-env check-not-root
 
 help:
@@ -93,6 +94,11 @@ help:
 	@echo "  uninstall         remove the owned installation (projects and exports are never touched)"
 	@echo "  status            show and verify the installation"
 	@echo "  clean             delete the Gradle build output (build/) only"
+	@echo "Release distributions (generated, git-ignored; need 'make models' first; never run as root):"
+	@echo "  dist-linux        generate linux-dist/   (linux-x64)     dist-windows   generate win-dist/ (win-x64, cross-assembled)"
+	@echo "  dist              both                   verify-dist    re-validate the generated directories"
+	@echo "  package           release-output/notebook-ai-<ver>-{linux,windows}-x64.zip + .sha256 (only from validated dist dirs)"
+	@echo "  package-linux | package-windows | dist-clean (removes only output this build generated) | test-dist"
 	@echo "  run | recognize IMAGE=... | test-install | system-deps (Debian/Ubuntu)"
 	@echo ""
 	@echo "Install options: APP_DIR= BIN_DIR= PREFIX= (system layout, use sudo) DESTDIR= DIST= MODELS_DIR= REPLACE_LEGACY=1"
@@ -155,6 +161,39 @@ run: check-not-root
 # Deletes the Gradle build output (build/) only. Never touches projects, exports, eval data or models.
 clean: check-not-root
 	$(GRADLEW) clean
+
+# Release distributions: portable packaging logic lives in Gradle (works on Linux and Windows hosts); Make only dispatches.
+dist-linux: check-not-root
+	$(GRADLEW) distLinux
+
+dist-windows: check-not-root
+	$(GRADLEW) distWindows
+
+dist: check-not-root
+	$(GRADLEW) dist
+
+verify-dist: check-not-root
+	$(GRADLEW) verifyDist
+
+package: check-not-root
+	$(GRADLEW) package
+
+package-linux: check-not-root
+	$(GRADLEW) packageLinux
+
+package-windows: check-not-root
+	$(GRADLEW) packageWindows
+
+dist-clean: check-not-root
+	$(GRADLEW) cleanDist
+
+# End-to-end distribution tests (extract the archive, run, install, uninstall); needs 'make package-linux' first.
+test-dist: check-env
+ifeq ($(NBAI_HOST),windows)
+	powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-dist-windows.ps1
+else
+	sh tools/test-dist.sh
+endif
 
 # Installing copies an already staged build. It never builds or downloads, so `sudo make install PREFIX=...`
 # cannot create root-owned build files. All logic (validation, ownership, upgrade, rollback) lives in the installer.

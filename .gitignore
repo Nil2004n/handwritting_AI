@@ -20,3 +20,8 @@ __pycache__/
 *.nbai
 projects-local/
 exports-local/
+
+# Generated release distributions and archives (build output; produced by ./gradlew dist / package)
+linux-dist/
+win-dist/
+release-output/

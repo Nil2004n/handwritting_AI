@@ -1,0 +1,44 @@
+THIRD-PARTY NOTICES - Notebook-AI @VERSION@ (@PLATFORM@)
+=========================================================
+
+Notebook-AI itself is licensed under the BSD 3-Clause License (see LICENSE).
+This distribution also contains the third-party components below, each under its own license.
+The Java runtime (JRE/JDK) is NOT included; you install it separately under its own license.
+
+COMPONENTS
+----------
+1. OpenJFX / JavaFX 21.0.7 (javafx.base, javafx.graphics, javafx.controls) - platform classifier "@JFX@"
+   License: GNU General Public License version 2 with the Classpath Exception (GPLv2+CPE).
+   Texts: licenses/openjfx/LICENSE, licenses/openjfx/ADDITIONAL_LICENSE_INFO, licenses/openjfx/ASSEMBLY_EXCEPTION.
+   Third-party code inside javafx.graphics: licenses/openjfx/jpeg_fx.md, licenses/openjfx/mesa3d.md.
+   Corresponding source: https://github.com/openjdk/jfx (OpenJFX 21 maintenance line, https://github.com/openjdk/jfx21u) and the
+   source jars on Maven Central (org.openjfx:javafx-*:21.0.7:sources). The JavaFX jars are shipped unmodified.
+   The license texts were taken from the jfx21u repository snapshot recorded in licenses/PROVENANCE.txt.
+
+2. ONNX Runtime 1.22.0 (Java API + native libraries for @ORT@) - Copyright (c) Microsoft Corporation
+   Declared license: MIT (Maven POM; source headers "Licensed under the MIT License").
+   Third-party components of ONNX Runtime: licenses/onnxruntime-ThirdPartyNotices.txt (taken from the jar).
+   MODIFICATION NOTICE: the ONNX Runtime jar in this distribution was repackaged to contain only the native libraries
+   for @ORT@ (natives for other operating systems were removed to keep one architecture per distribution).
+   No class files were changed. The original jar's SHA-256 is recorded in distribution.json.
+   KNOWN GAP: the ONNX Runtime LICENSE file itself could not be obtained by the packager; see "Known gaps".
+
+3. metadata-extractor 2.19.0 (Drew Noakes) - Apache License 2.0 (licenses/Apache-2.0.txt).
+
+4. xmpcore 6.1.11 (Adobe XMP Core, via metadata-extractor) - BSD 3-Clause License (declared in its Maven POM).
+   KNOWN GAP: no notice file exists in the jar and none was found upstream; the copyright notice text is missing here.
+
+5. PaddleOCR PP-OCRv6_small models (app/models/*.onnx, *.yml) - PaddlePaddle authors
+   License: Apache License 2.0 as declared in the metadata of the model repositories
+   (PaddlePaddle/PP-OCRv6_small_det_onnx and PaddlePaddle/PP-OCRv6_small_rec_onnx on Hugging Face).
+   Texts: licenses/Apache-2.0.txt and licenses/PaddleOCR-LICENSE (the upstream PaddleOCR license).
+   The model files are unmodified; their SHA-256 values are in app/models/checksums.sha256 and distribution.json.
+   NOTE: the model repositories declare the license through metadata only (no LICENSE file is present in them).
+
+KNOWN GAPS (listed so that nobody assumes more than has been established)
+-------------------------------------------------------------------------
+A. ONNX Runtime: its own LICENSE text is not included (see 2).
+B. xmpcore: its BSD-3-Clause copyright notice text is not included (see 4).
+C. OpenJFX license texts come from a repository snapshot of the 21 maintenance line, not from the 21.0.7 release tag.
+D. Model licensing rests on the declaration in the model repositories' metadata (see 5).
+These must be resolved or accepted by whoever publishes this distribution. The same list is in distribution.json ("licensingGaps").

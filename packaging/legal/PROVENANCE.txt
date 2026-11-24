@@ -1,0 +1,17 @@
+Provenance of the license texts in this directory (fetched/copied once and committed as inputs to the distribution build):
+
+- openjfx/LICENSE, openjfx/ADDITIONAL_LICENSE_INFO, openjfx/ASSEMBLY_EXCEPTION, openjfx/jpeg_fx.md, openjfx/mesa3d.md
+    https://github.com/openjdk/jfx21u at commit dd5bd597dc166a8b3807cde608109d0b6dc156be (the OpenJFX 21 maintenance line;
+    the JavaFX 21.0.7 Maven jars do not contain their own license text). Only legal files that apply to the shipped modules
+    (javafx.base, javafx.graphics, javafx.controls) are included. NOTE: this is a branch snapshot, not the 21.0.7 release tag.
+- Apache-2.0.txt
+    The canonical Apache License 2.0 text (Debian common-licenses). Used for metadata-extractor and for the PP-OCRv6 models
+    (the upstream PaddleOCR license is also kept in ../../third-party/PaddleOCR-LICENSE).
+
+KNOWN GAPS (reported, not papered over):
+- ONNX Runtime 1.22.0: declared MIT (Maven POM; per-file headers "Licensed under the MIT License"). Its own LICENSE file could not
+  be obtained (the Maven jars do not contain it and the upstream raw URLs returned 404 from this environment). The jar's own
+  ThirdPartyNotices.txt (third-party components) IS shipped.
+- xmpcore 6.1.11 (transitive dependency of metadata-extractor): declared BSD-3-Clause (Maven POM). No notice file is contained in
+  its jar and none was found upstream; the copyright notice text is therefore missing.
+These gaps are written into THIRD-PARTY-NOTICES.txt and distribution.json ("licensingGaps"). Resolve them before shipping.
