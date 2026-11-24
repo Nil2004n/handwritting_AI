@@ -116,15 +116,8 @@ jobs:
       - name: Models (checksums verified against models/checksums.sha256)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
 
-      - name: Build the upgrade-test installer (version 0.1.1, test only, never uploaded)
-        run: |
-          $ErrorActionPreference = 'Continue'   # Gradle writes progress/warnings to stderr; success is decided by the exit code
-          .\gradlew.bat packageExe "-PnativeAppVersion=0.1.1" --console=plain *>&1 | Tee-Object -FilePath build\ci\gradle-upgrade-0.1.1.log
-          if ($LASTEXITCODE -ne 0) { throw "gradlew exit code $LASTEXITCODE" }
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\upgrade" | Out-Null
-          Move-Item release-output\notebook-ai-0.1.1-windows-x64-setup.exe "$env:RUNNER_TEMP\upgrade\"
-
       - name: Build the Windows EXE (jpackage + WiX)
+        id: build
         run: |
           $ErrorActionPreference = 'Continue'
           .\gradlew.bat packageExe --console=plain *>&1 | Tee-Object -FilePath build\ci\gradle-packageExe.log
@@ -134,13 +127,15 @@ jobs:
           "EXE: $($exe.Name)`nsize: $($exe.Length)`nsha256: $h" | Tee-Object -FilePath build\ci\exe-identity.txt | Add-Content build\ci\identity.txt
           Copy-Item build\native\windows\content\legal\native-package.json build\ci\native-package.json
 
-      - name: Installer lifecycle tests (disposable runner)
-        timeout-minutes: 30
+      # ---- STAGE 1: the main verdict (install, bundled runtime, OCR, GUI, uninstall), uploaded before anything slow runs ----
+      - name: Installer lifecycle tests - main (disposable runner)
+        id: main
+        timeout-minutes: 12
         env:
           NBAI_DISPOSABLE_ENV: '1'
         run: |
           $ErrorActionPreference = 'Continue'
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -SkipStandardUser -UpgradeExe "$env:RUNNER_TEMP\upgrade\notebook-ai-0.1.1-windows-x64-setup.exe" *>&1 | Tee-Object -FilePath build\ci\windows-installer-test-report.txt
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -SkipStandardUser -SkipUpgrade *>&1 | Tee-Object -FilePath build\ci\windows-installer-test-report.txt
           exit $LASTEXITCODE
 
       - name: Public-release license gate (informational here; EXPECTED to fail while evidence is unresolved)
@@ -151,7 +146,7 @@ jobs:
           .\gradlew.bat verifyReleaseLicensing --console=plain *>&1 | Tee-Object -FilePath build\ci\verifyReleaseLicensing.log
           "verifyReleaseLicensing exit code: $LASTEXITCODE (non-zero = public release blocked by unresolved license evidence; this is intentional)" | Add-Content build\ci\identity.txt
 
-      - name: Write the artifact notice and the run summary
+      - name: Write the artifact notice
         if: ${{ always() }}
         run: |
           @"
@@ -162,12 +157,8 @@ jobs:
           - Built from commit $env:GITHUB_SHA by workflow run $env:GITHUB_RUN_ID (https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID).
           Do not redistribute. Do not treat a green run as release approval.
           "@ | Set-Content build\ci\INTERNAL-BUILD-NOTICE.txt
-          "### Windows native installer (INTERNAL, unsigned, not release-approved)" | Add-Content $env:GITHUB_STEP_SUMMARY
-          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
-          Get-Content build\ci\identity.txt -ErrorAction SilentlyContinue | Add-Content $env:GITHUB_STEP_SUMMARY
-          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
 
-      - name: Upload the internal build (EXE, checksum, identity, test report)
+      - name: Upload the internal build (EXE, checksum, identity, main test report)
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -185,14 +176,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 2
 
-      - name: Standard-user (non-Administrator) install test (separate step, creates a local account)
-        if: ${{ always() }}
-        timeout-minutes: 20
+      # ---- STAGE 2: upgrade identity + running-app (file lock). Slowest and most likely to stall: own build, tight timeouts, own report ----
+      - name: Build the upgrade-test installer (version 0.1.1, test only, never uploaded)
+        id: upgbuild
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Continue'
+          .\gradlew.bat packageExe "-PnativeAppVersion=0.1.1" --console=plain *>&1 | Tee-Object -FilePath build\ci\gradle-upgrade-0.1.1.log
+          if ($LASTEXITCODE -ne 0) { throw "gradlew exit code $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\upgrade" | Out-Null
+          Move-Item release-output\notebook-ai-0.1.1-windows-x64-setup.exe "$env:RUNNER_TEMP\upgrade\"
+
+      - name: Upgrade identity and running-app (file lock) tests
+        id: upgrade
+        if: ${{ always() && steps.upgbuild.outcome == 'success' }}
+        timeout-minutes: 15
         env:
           NBAI_DISPOSABLE_ENV: '1'
         run: |
           $ErrorActionPreference = 'Continue'
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -StandardUserOnly *>&1 | Tee-Object -FilePath build\ci\windows-standard-user-test-report.txt
+          $first = (Get-ChildItem release-output -Filter 'notebook-ai-0.1.0-windows-x64-setup.exe').FullName
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -Exe $first -UpgradeOnly -SkipStandardUser -UpgradeExe "$env:RUNNER_TEMP\upgrade\notebook-ai-0.1.1-windows-x64-setup.exe" *>&1 | Tee-Object -FilePath build\ci\windows-upgrade-test-report.txt
+          exit $LASTEXITCODE
+
+      - name: Upload the upgrade test report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-upgrade-test-report
+          path: build/ci/windows-upgrade-test-report.txt
+          if-no-files-found: warn
+          retention-days: 2
+
+      # ---- STAGE 3: non-Administrator install (creates a local account) ----
+      - name: Standard-user (non-Administrator) install test (separate step, creates a local account)
+        id: stduser
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        timeout-minutes: 12
+        env:
+          NBAI_DISPOSABLE_ENV: '1'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $first = (Get-ChildItem release-output -Filter 'notebook-ai-0.1.0-windows-x64-setup.exe').FullName
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -Exe $first -StandardUserOnly *>&1 | Tee-Object -FilePath build\ci\windows-standard-user-test-report.txt
           exit $LASTEXITCODE
 
       - name: Upload the standard-user test report
@@ -203,6 +230,24 @@ jobs:
           path: build/ci/windows-standard-user-test-report.txt
           if-no-files-found: warn
           retention-days: 2
+
+      - name: Verdict summary (INTERNAL build; not release approval)
+        if: ${{ always() }}
+        env:
+          O_BUILD: ${{ steps.build.outcome }}
+          O_MAIN: ${{ steps.main.outcome }}
+          O_UPGBUILD: ${{ steps.upgbuild.outcome }}
+          O_UPGRADE: ${{ steps.upgrade.outcome }}
+          O_STD: ${{ steps.stduser.outcome }}
+        run: |
+          $lines = @('### Windows native installer - verdict (INTERNAL, unsigned, NOT release-approved)', '', '| Stage | Result |', '|---|---|',
+            "| Build EXE (jpackage + WiX) | $env:O_BUILD |", "| Main lifecycle: install, bundled runtime, OCR, GUI, uninstall | $env:O_MAIN |",
+            "| Build upgrade-test installer | $env:O_UPGBUILD |", "| Upgrade identity + running-app (file lock) | $env:O_UPGRADE |",
+            "| Standard-user (non-Administrator) install | $env:O_STD |", '', '```')
+          $lines | Add-Content $env:GITHUB_STEP_SUMMARY
+          Get-Content build\ci\identity.txt -ErrorAction SilentlyContinue | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Licensing: verifyReleaseLicensing is expected to FAIL while evidence is unresolved; that is intentional and not a CI defect." | Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Upload failure logs
         if: ${{ failure() }}

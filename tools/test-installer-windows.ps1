@@ -10,9 +10,10 @@
 #
 #   -Exe          the installer under test (default: release-output\notebook-ai-*-windows-x64-setup.exe, lowest version)
 #   -UpgradeExe   an installer with a HIGHER version, for the upgrade tests (the CI job builds one with -PnativeAppVersion)
+#   -SkipUpgrade / -UpgradeOnly   leave out / run only the upgrade + running-app (file lock) section (it is the slowest and the one most likely to stall)
 #   -SkipStandardUser / -StandardUserOnly   run the main lifecycle without / only the non-Administrator install section (CI runs them as
 #                 separate steps so a problem in the account-creation section can never hide the main results)
-param([string]$Exe, [string]$UpgradeExe, [switch]$StandardUserOnly, [switch]$SkipStandardUser)
+param([string]$Exe, [string]$UpgradeExe, [switch]$StandardUserOnly, [switch]$SkipStandardUser, [switch]$SkipUpgrade, [switch]$UpgradeOnly)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 if ($env:NBAI_DISPOSABLE_ENV -ne '1') { Write-Host 'refusing: set NBAI_DISPOSABLE_ENV=1 only on a disposable Windows runner/VM'; exit 2 }
@@ -32,13 +33,22 @@ function Sha($p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.
 # Runs a program with a timeout; never hangs the job (a GUI wizard shown by a wrong switch is killed).
 function Run-Exe([string]$path, [string]$arguments, [int]$timeoutSec = 600) {
     $p = if ($arguments) { Start-Process -FilePath $path -ArgumentList $arguments -PassThru } else { Start-Process -FilePath $path -PassThru }
-    if (-not $p.WaitForExit($timeoutSec * 1000)) { try { $p.Kill() } catch { }; return @{ Exit = -999; TimedOut = $true } }
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $beat = 0
+    while (-not $p.HasExited) {
+        if ($sw.Elapsed.TotalSeconds -ge $timeoutSec) {
+            [void](Invoke-Native 'taskkill.exe' @('/PID', [string]$p.Id, '/T', '/F'))    # the whole tree: the EXE wrapper AND the msiexec it started
+            Write-Host ("  (killed after $timeoutSec s: " + (Split-Path -Leaf $path) + " $arguments)")
+            return @{ Exit = -999; TimedOut = $true }
+        }
+        Start-Sleep -Seconds 2
+        if ([int]$sw.Elapsed.TotalSeconds -ge $beat + 20) { $beat = [int]$sw.Elapsed.TotalSeconds; Write-Host ("  ... still running after $beat s: " + (Split-Path -Leaf $path) + " $arguments") }
+    }
     return @{ Exit = $p.ExitCode; TimedOut = $false }
 }
 function Install-Silently([string]$path, [string]$tag) {
     $log = Join-Path $env:TEMP "nbai-install-$tag.log"
     foreach ($a in @("/qn /l*v `"$log`"", '/quiet /norestart', '/S')) {
-        $r = Run-Exe $path $a 240
+        $r = Run-Exe $path $a 150
         Obs ("installer switch '$a' -> exit " + $r.Exit + $(if ($r.TimedOut) { ' (timed out and was killed)' } else { '' }))
         if (-not $r.TimedOut -and ($r.Exit -eq 0 -or $r.Exit -eq 3010)) { return $a }
     }
@@ -164,6 +174,8 @@ T 'notebook-ai.exe is a GUI-subsystem program (starts without a console window)'
 T 'notebook-ai-cli.exe is a console-subsystem program (usable from CMD)' ((Get-PeSubsystem (Join-Path $App 'notebook-ai-cli.exe')) -eq 3)
 Obs ("the machine-wide PATH is not modified by this installer; the console command is: `"" + (Join-Path $App 'notebook-ai-cli.exe') + "`" (no PATH integration is implemented)")
 
+$gui = $null
+if (-not $UpgradeOnly) {
 Write-Host '== 2. bundled runtime: no Java on PATH, no JAVA_HOME'
 Strip-Java
 $wd = Join-Path $env:TEMP ('nbai wdir ' + [char]0x00E9 + [char]0x4E2D + [char]0x6587); New-Item -ItemType Directory -Force -Path $wd | Out-Null
@@ -196,21 +208,25 @@ try {
 Write-Host '== 3. GUI launch (what a runner allows; --self-check is NOT a GUI acceptance test)'
 Strip-Java
 $gui = Start-Process -FilePath (Join-Path $App 'notebook-ai.exe') -PassThru
-Start-Sleep -Seconds 25
-T 'the GUI launcher is still running after 25 s (did not crash)' (-not $gui.HasExited) ("exit code " + $(if ($gui.HasExited) { $gui.ExitCode } else { 'n/a' }))
+Start-Sleep -Seconds 15
+T 'the GUI launcher is still running after 15 s (did not crash)' (-not $gui.HasExited) ("exit code " + $(if ($gui.HasExited) { $gui.ExitCode } else { 'n/a' }))
 if (-not $gui.HasExited) {
     $gui.Refresh(); $title = $gui.MainWindowTitle
     T 'the application window exists and carries the expected title' ($title -like '*notebook-ai*') "title='$title'"
     Obs ("the GUI process stays running for the file-lock test below; window title: '$title'")
 }
 Restore-Java
+if ($SkipUpgrade -and $null -ne $gui -and -not $gui.HasExited) { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
+}
 
+if (-not $SkipUpgrade) {
 Write-Host '== 4. upgrade identity and running-app (file lock) behavior'
 if ($UpgradeExe -and (Test-Path -LiteralPath $UpgradeExe)) {
+    if ($null -eq $gui -or $gui.HasExited) { Strip-Java; $gui = Start-Process -FilePath (Join-Path $App 'notebook-ai.exe') -PassThru; Restore-Java; Start-Sleep -Seconds 10; Obs ('GUI started for the running-app case; still running: ' + (-not $gui.HasExited)) }
     $before = @(Get-Registered)
     if ($before.Count -ne 1) { Bad 'upgrade tests need exactly one registered installation to start from' ($before | Out-String) }
     $bv = if ($before.Count -ge 1) { $before[0].Version } else { '' }
-    $r = Run-Exe $UpgradeExe '/qn' 300
+    $r = Run-Exe $UpgradeExe '/qn' 120
     Obs ("OBSERVED file-lock case: upgrade installer run while notebook-ai.exe was RUNNING -> exit " + $r.Exit + $(if ($r.TimedOut) { ' (timed out)' } else { '' }))
     $mid = @(Get-Registered)
     Obs ("registered after that attempt: " + (($mid | ForEach-Object { $_.Name + ' ' + $_.Version }) -join '; '))
@@ -221,7 +237,7 @@ if ($UpgradeExe -and (Test-Path -LiteralPath $UpgradeExe)) {
     Restore-Java
     if (-not $gui.HasExited) { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
     if ($mid.Count -eq 1 -and $mid[0].Version -eq $bv) {
-        $r2 = Run-Exe $UpgradeExe '/qn' 300
+        $r2 = Run-Exe $UpgradeExe '/qn' 180
         Obs ("upgrade attempt #2 with the app closed -> exit " + $r2.Exit)
     }
     $after = @(Get-Registered)
@@ -238,12 +254,13 @@ if ($UpgradeExe -and (Test-Path -LiteralPath $UpgradeExe)) {
     Restore-Java
     T 'user project and preferences survived the upgrade' ((Get-Content (Join-Path $Docs 'work.nbai') -Raw) -eq 'my project' -and (Get-Content (Join-Path $Prefs 'prefs.txt') -Raw) -eq 'my preferences')
 } else { Skip 'upgrade and file-lock tests need a higher-version installer (-UpgradeExe); none was supplied' ; if (-not $gui.HasExited) { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue } }
+}
 
 Write-Host '== 5. uninstall'
 $un = @(Get-Registered) | Select-Object -First 1
 if ($un) {
-    if ($un.Uninstall -match '(?i)msiexec') { $guid = [regex]::Match($un.Uninstall, '\{[0-9A-Fa-f-]+\}').Value; $r = Run-Exe 'msiexec.exe' "/x $guid /qn" 300 }
-    else { $r = Run-Exe 'cmd.exe' ("/c " + $un.Uninstall + " /quiet") 300 }
+    if ($un.Uninstall -match '(?i)msiexec') { $guid = [regex]::Match($un.Uninstall, '\{[0-9A-Fa-f-]+\}').Value; $r = Run-Exe 'msiexec.exe' "/x $guid /qn" 180 }
+    else { $r = Run-Exe 'cmd.exe' ("/c " + $un.Uninstall + " /quiet") 180 }
     T 'uninstall succeeded' ($r.Exit -eq 0 -or $r.Exit -eq 3010) ("exit " + $r.Exit)
     T 'the application directory is gone' (-not (Test-Path (Join-Path $App 'notebook-ai.exe')))
     T 'removed from the uninstall list' (@(Get-Registered).Count -eq 0)
