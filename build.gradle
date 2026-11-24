@@ -234,6 +234,18 @@ tasks.register('spellingPerf', JavaExec) {
     mainClass = 'notebookai.assist.SpellingPerf'
 }
 
+tasks.register('spellingAssistEval', JavaExec) {
+    group = 'verification'
+    description = 'SIMULATED top-1-suggestion acceptance vs raw OCR on an evaluation manifest: -PevalManifest=eval/cases.tsv [-PaggregateOnly=true].'
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'notebookai.assist.SpellingAssistEval'
+    if (project.hasProperty('evalManifest')) {
+        args project.property('evalManifest')
+        if (project.hasProperty('aggregateOnly')) { args '--aggregate-only' }
+    }
+}
+
 tasks.register('boundaryFingerprint', JavaExec) {
     group = 'verification'
     description = 'Canonical per-boundary hashes (decode, tensors, geometry, raw text): -Pimages=a.png,b.jpg [-PhashOnly=true]. For before/after refactor comparison.'

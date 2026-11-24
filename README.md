@@ -511,6 +511,7 @@ has **not been run** on real Windows.
 ## Repository layout
 
 ```
+spelling/                  offline English spelling assistance (pure Java, no dependencies, bundled SCOWL word lists; separate from the engine): docs/SPELLING.md
 engine/                    PORTABLE OCR engine (Gradle subproject, pure Java 17, no AWT/JavaFX): PixelImage, ModelAssets, OcrEngine, OcrResult
                            and the pipeline internals. Specification and Android notes: docs/ENGINE.md
 android-proof/             separate Gradle build (needs an Android SDK; NOT part of the desktop build): engine proof harness, not a product UI
@@ -536,6 +537,12 @@ Android proof harness: see [`docs/ENGINE.md`](docs/ENGINE.md). Android *build* i
 (no device was available). Commands: `./gradlew :engine:build` (engine tests + dependency check), and
 `ANDROID_HOME=$HOME/Android/Sdk ./gradlew -p android-proof :app:verifyEngineAndroidApi :app:verifyProofDependencies :app:assembleDebug`.
 Packaging tests that must not touch `release-output/` take `-PreleaseOutputDir=/some/temp/dir`.
+
+**Spelling assistance (optional, suggestion-first):** the transcript is checked in the background against bundled, offline SCOWL word lists (US/UK/Canadian English);
+possible misspellings appear in a panel under the transcript with ranked suggestions, **Replace / custom replacement / Ignore Once / Ignore All / Add to Dictionary** and Undo/Redo.
+It never changes the raw OCR text and never replaces anything automatically (automatic replacement is deferred). The personal dictionary and the setting live in your user profile
+(`~/.config/notebook-ai` on Linux, `%APPDATA%\notebook-ai` on Windows; override with `NOTEBOOK_AI_CONFIG_DIR`), nothing is uploaded. It is not Microsoft's spell checker. Details, limits and
+measurements: [`docs/SPELLING.md`](docs/SPELLING.md). Commands: `./gradlew test`, `xvfb-run -a ./gradlew spellingGuiAcceptance`.
 
 A guided tour of the design is in [`fde.md`](fde.md). The earlier React-Native/Android implementation is preserved
 under the `archive/android-rn-phase0` tag.

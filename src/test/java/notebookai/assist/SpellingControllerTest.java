@@ -321,6 +321,25 @@ class SpellingControllerTest {
     }
 
     @Test
+    void aTranscriptBeyondTheDocumentedLimitIsReportedNotTruncatedAndEditingContinues() {
+        editor.text = "teh ".repeat(SpellBackend.MAX_TEXT_LENGTH / 4 + 10);
+        assertTrue(editor.text.length() > SpellBackend.MAX_TEXT_LENGTH);
+        checkNow();
+        assertEquals(Status.UNAVAILABLE, ctl.status());
+        assertTrue(ctl.message().contains("too long"), ctl.message());
+        assertEquals(List.of(), ctl.issues(), "no partial result is shown for text that was not checked");
+        String before = editor.text;
+        editor.type(before + "more");
+        ctl.onTextChanged();
+        assertEquals(before + "more", editor.text, "editing is unaffected");
+        editor.type("teh");                         // shorter again: checking works again
+        ctl.onTextChanged();
+        checkNow();
+        assertEquals(Status.READY, ctl.status());
+        assertEquals(List.of("teh"), tokens(ctl.issues()));
+    }
+
+    @Test
     void requestsAreBoundedWhileTypingQuickly() {
         for (int i = 0; i < 500; i++) {
             editor.type("teh " + i);

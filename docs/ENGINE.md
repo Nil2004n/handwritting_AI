@@ -185,7 +185,7 @@ A recognition score is the mean of the winning output values over the emitted po
 Kept regions are grouped into display lines by `ReadingOrder` (tilt-aware: project onto the dominant text direction, cluster rows, split a row where the gap along the text exceeds
 `0.6 ×` the taller neighbour's padded thickness). Within a line regions are joined with a space; lines with `\n`. `OcrResult.TextRegion`: `polygon[4][2]` doubles (source pixels, TL,TR,BR,BL),
 `box[4]` = rounded axis-aligned `[x0,y0,x1,y1]`, `text`, `detScore` (detector), `recScore` (recognizer). Raw text is never edited.
-A spell-check/text-assistance layer, where used, is separate and never part of the engine.
+A spell-check/text-assistance layer, where used, is separate and never part of the engine (see `docs/SPELLING.md`: the `spelling` module and the desktop `notebookai.assist` package; the engine does not depend on them and `EngineBoundaryTest` enforces it).
 
 ---------------------------------------------------------------------------------------------------------------------------------
 
