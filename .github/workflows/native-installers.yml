@@ -1,24 +1,208 @@
-# Builds and tests the NATIVE installers (jpackage): notebook-ai_<ver>_amd64.deb on Ubuntu and the Windows EXE on Windows.
-# These jobs run on disposable GitHub-hosted runners. They have NOT been run by the maintainers (no CI run, no Windows machine).
-# Packages built here are INTERNAL builds while packaging/licensing-status.json has unresolved items; nothing is published.
+# Builds and tests the NATIVE installers (jpackage): the Windows EXE on a Windows runner and, optionally, the Debian package on Ubuntu.
+#
+# INTERNAL TEST BUILDS ONLY. Packages built here are unsigned, built while third-party license evidence is unresolved
+# (packaging/licensing-status.json) and are NOT release-approved. This workflow never creates a GitHub Release, tag or package.
+# It is manual (workflow_dispatch) so that nothing is built or uploaded implicitly.
+#
+# Security posture: read-only token, no secrets, no pull_request trigger, actions pinned to commit SHAs, no ${{ }} interpolation
+# inside script bodies (inputs reach scripts only through env), downloaded tools verified against pinned SHA-256 values.
+#
+# NOTE ON ARTIFACTS: in a PUBLIC repository, workflow artifacts can be downloaded by any signed-in GitHub user while they exist.
+# Retention is therefore kept to 2 days, and the artifact name states what it is.
 name: native-installers
+run-name: native installers (${{ inputs.target }}) from ${{ github.sha }}
+
 on:
   workflow_dispatch:
-  push:
-    paths: ['gradle/native-installers.gradle', 'packaging/**', 'tools/test-deb*', 'tools/test-installer-windows.ps1', '.github/workflows/native-installers.yml']
+    inputs:
+      target:
+        description: 'What to build and test'
+        type: choice
+        options: [windows, deb, both]
+        default: windows
+      expected_sha:
+        description: 'Optional: abort unless the checked-out commit equals this full 40-character SHA'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
+concurrency:
+  group: native-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Temurin 21 GA (regular quarterly update, released 2026-10-22). The job FAILS unless the runtime it ends up with really is this version.
+  TEMURIN_VERSION: '21.0.13+9'
+  EXPECTED_JAVA: '21.0.13'
+  # WiX Toolset 3.14.1 (the last 3.x): JDK 21's jpackage supports WiX 3.x only (WiX 4/5 support arrived in JDK 24).
+  # Official release asset https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe (32,438,176 bytes);
+  # the SHA-256 below was computed from that download when this workflow was prepared (the release publishes no digest).
+  WIX_URL: 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe'
+  WIX_SHA256: '6bf6d03d6923d9ef827ae1d943b90b42b8ebb1b0f68ef6d55f868fa34c738a29'
+
 jobs:
-  deb:
-    runs-on: ubuntu-22.04
+  windows-exe:
+    if: ${{ inputs.target == 'windows' || inputs.target == 'both' }}
+    runs-on: windows-2022
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: powershell
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify the checked-out source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path build\ci | Out-Null
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:GITHUB_SHA) { throw "checked-out $head differs from github.sha $env:GITHUB_SHA" }
+          if ($env:EXPECTED_SHA -and $head -ne $env:EXPECTED_SHA.Trim()) { throw "checked-out $head differs from the expected SHA $env:EXPECTED_SHA" }
+          $dirty = (git status --porcelain)
+          "source commit: $head`nworking tree dirty: $([bool]$dirty)`nref: $env:GITHUB_REF" | Tee-Object -FilePath build\ci\identity.txt
+          if ($dirty) { throw "the working tree is not clean after checkout: $dirty" }
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
-          java-version: '21.0.7+6'     # a GA Temurin 21 JDK (with jmods): the explicitly identified bundled-runtime source
+          java-package: jdk
+          java-version: ${{ env.TEMURIN_VERSION }}
+
+      - name: Verify the packaging JDK (identity, version, jmods)
+        run: |
+          $ErrorActionPreference = 'Continue'   # java -version writes to stderr; every result below is asserted explicitly
+          $v = (& java -version 2>&1 | Out-String)
+          $v
+          if ($v -notmatch 'Temurin') { throw 'the JDK is not Eclipse Temurin' }
+          if ($v -notmatch [regex]::Escape($env:EXPECTED_JAVA)) { throw "the JDK is not $env:EXPECTED_JAVA" }
+          if (-not (Test-Path "$env:JAVA_HOME\jmods")) { throw 'the JDK has no jmods directory (jlink needs it)' }
+          if (-not (Test-Path "$env:JAVA_HOME\bin\jpackage.exe")) { throw 'the JDK has no jpackage' }
+          "JDK:`n$v`nJAVA_HOME=$env:JAVA_HOME`n$(Get-Content "$env:JAVA_HOME\release" -Raw)" | Add-Content build\ci\identity.txt
+
+      - name: Install WiX Toolset 3.14.1 (verified)
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Invoke-WebRequest -Uri $env:WIX_URL -OutFile wix314.exe -UseBasicParsing
+          $h = (Get-FileHash wix314.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($h -ne $env:WIX_SHA256) { throw "WiX installer hash mismatch: $h" }
+          $p = Start-Process -FilePath .\wix314.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "WiX installer exit code $($p.ExitCode)" }
+          $bin = Get-ChildItem 'C:\Program Files (x86)' -Filter 'WiX Toolset v3*' | Select-Object -First 1 | ForEach-Object { Join-Path $_.FullName 'bin' }
+          if (-not $bin -or -not (Test-Path (Join-Path $bin 'candle.exe'))) { throw 'WiX 3.x tools not found after installation' }
+          Add-Content $env:GITHUB_PATH $bin
+          $ver = (& (Join-Path $bin 'candle.exe') -? 2>&1 | Select-String -Pattern 'version' | Select-Object -First 1)
+          "WiX: $ver`nWiX installer sha256: $h" | Tee-Object -FilePath build\ci\wix.txt | Add-Content build\ci\identity.txt
+
+      - name: Models (checksums verified against models/checksums.sha256)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
+
+      - name: Build the upgrade-test installer (version 0.1.1, test only, never uploaded)
+        run: |
+          $ErrorActionPreference = 'Continue'   # Gradle writes progress/warnings to stderr; success is decided by the exit code
+          .\gradlew.bat packageExe "-PnativeAppVersion=0.1.1" --console=plain *>&1 | Tee-Object -FilePath build\ci\gradle-upgrade-0.1.1.log
+          if ($LASTEXITCODE -ne 0) { throw "gradlew exit code $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\upgrade" | Out-Null
+          Move-Item release-output\notebook-ai-0.1.1-windows-x64-setup.exe "$env:RUNNER_TEMP\upgrade\"
+
+      - name: Build the Windows EXE (jpackage + WiX)
+        run: |
+          $ErrorActionPreference = 'Continue'
+          .\gradlew.bat packageExe --console=plain *>&1 | Tee-Object -FilePath build\ci\gradle-packageExe.log
+          if ($LASTEXITCODE -ne 0) { throw "gradlew exit code $LASTEXITCODE" }
+          $exe = Get-Item release-output\notebook-ai-0.1.0-windows-x64-setup.exe
+          $h = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "EXE: $($exe.Name)`nsize: $($exe.Length)`nsha256: $h" | Tee-Object -FilePath build\ci\exe-identity.txt | Add-Content build\ci\identity.txt
+          Copy-Item build\native\windows\content\legal\native-package.json build\ci\native-package.json
+
+      - name: Installer lifecycle tests (disposable runner)
+        env:
+          NBAI_DISPOSABLE_ENV: '1'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1 -UpgradeExe "$env:RUNNER_TEMP\upgrade\notebook-ai-0.1.1-windows-x64-setup.exe" *>&1 | Tee-Object -FilePath build\ci\windows-installer-test-report.txt
+          exit $LASTEXITCODE
+
+      - name: Public-release license gate (informational here; EXPECTED to fail while evidence is unresolved)
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Continue'
+          .\gradlew.bat verifyReleaseLicensing --console=plain *>&1 | Tee-Object -FilePath build\ci\verifyReleaseLicensing.log
+          "verifyReleaseLicensing exit code: $LASTEXITCODE (non-zero = public release blocked by unresolved license evidence; this is intentional)" | Add-Content build\ci\identity.txt
+
+      - name: Write the artifact notice and the run summary
+        if: ${{ always() }}
+        run: |
+          @"
+          INTERNAL TEST BUILD - NOT RELEASE-APPROVED
+          - Unsigned: no Authenticode signature; Windows may show an unknown-publisher warning.
+          - Publisher fields are placeholders (not configured).
+          - Third-party license evidence is UNRESOLVED (see licenses/licensing-status.json inside the package and native-package.json).
+          - Built from commit $env:GITHUB_SHA by workflow run $env:GITHUB_RUN_ID (https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID).
+          Do not redistribute. Do not treat a green run as release approval.
+          "@ | Set-Content build\ci\INTERNAL-BUILD-NOTICE.txt
+          "### Windows native installer (INTERNAL, unsigned, not release-approved)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+          Get-Content build\ci\identity.txt -ErrorAction SilentlyContinue | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload the internal build (EXE, checksum, identity, test report)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notebook-ai-windows-INTERNAL-unsigned-not-release-approved
+          path: |
+            release-output/notebook-ai-0.1.0-windows-x64-setup.exe
+            release-output/notebook-ai-0.1.0-windows-x64-setup.exe.sha256
+            build/ci/native-package.json
+            build/ci/identity.txt
+            build/ci/exe-identity.txt
+            build/ci/wix.txt
+            build/ci/INTERNAL-BUILD-NOTICE.txt
+            build/ci/windows-installer-test-report.txt
+            build/ci/verifyReleaseLicensing.log
+          if-no-files-found: warn
+          retention-days: 2
+
+      - name: Upload failure logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-failure-logs
+          path: |
+            build/ci/*.log
+            build/ci/*.txt
+            build/native/windows/work/**/*.log
+            build/native/windows/work/**/*.wxs
+            build/native/windows/work/**/*.txt
+            build/reports/**
+          if-no-files-found: warn
+          retention-days: 2
+
+  deb:
+    if: ${{ inputs.target == 'deb' || inputs.target == 'both' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-package: jdk
+          java-version: ${{ env.TEMURIN_VERSION }}
+      - name: Verify the packaging JDK
+        run: |
+          java -version 2>&1 | tee /tmp/jv.txt
+          grep -q Temurin /tmp/jv.txt && grep -q "$EXPECTED_JAVA" /tmp/jv.txt
+          test -d "$JAVA_HOME/jmods"
       - name: Packaging prerequisites
         run: sudo apt-get update && sudo apt-get install -y fakeroot binutils dpkg-dev xvfb xdotool xfwm4 python3-pil lintian
       - run: make models
@@ -28,32 +212,6 @@ jobs:
         run: sh tools/test-deb.sh
       - name: Lifecycle with apt on this disposable runner
         run: sudo NBAI_DISPOSABLE_ENV=1 sh tools/test-deb-lifecycle.sh release-output/notebook-ai_*_amd64.deb
-      - name: Public-release gate (EXPECTED to fail while license evidence is unresolved)
+      - name: Public-release license gate (informational; EXPECTED to fail while evidence is unresolved)
         run: ./gradlew verifyReleaseLicensing
         continue-on-error: true
-
-  windows-exe:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21.0.7+6'
-      - name: WiX Toolset 3.x (JDK 21 jpackage does not support WiX 4/5)
-        shell: powershell
-        run: |
-          choco install wixtoolset --version=3.14.1 -y --no-progress
-          $wix = Get-ChildItem 'C:\Program Files (x86)' -Filter 'WiX Toolset v3*' | Select-Object -First 1
-          Add-Content $env:GITHUB_PATH (Join-Path $wix.FullName 'bin')
-      - name: Models
-        shell: cmd
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\download-models.ps1
-      - name: Build the EXE (jpackage)
-        shell: cmd
-        run: gradlew.bat packageExe
-      - name: Installer lifecycle on this disposable runner
-        shell: powershell
-        run: |
-          $env:NBAI_DISPOSABLE_ENV = '1'
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-installer-windows.ps1
