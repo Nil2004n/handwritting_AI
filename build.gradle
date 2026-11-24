@@ -10,6 +10,29 @@ repositories {
     mavenCentral()
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Target platform. JavaFX ships per-OS native jars (classifier), so the distribution is built for ONE
+// explicit platform. Default = the build host. Select another with -PtargetPlatform=win-x64|linux-x64
+// (e.g. to stage a Windows distribution on Linux: ./gradlew installDist -PtargetPlatform=win-x64).
+// Only platforms whose dependencies exist are accepted; there is no silent fallback.
+// ONNX Runtime 1.22.0 bundles win-x64, linux-x64, linux-aarch64 and macOS natives in one jar; JavaFX
+// 21.0.7 is used here with the 'linux' and 'win' (x64) classifiers only.
+// ---------------------------------------------------------------------------------------------------
+def supportedPlatforms = ['linux-x64': 'linux', 'win-x64': 'win']
+def hostOsName = System.getProperty('os.name').toLowerCase()
+def hostArchName = System.getProperty('os.arch').toLowerCase()
+def hostPlatform = (hostOsName.contains('linux') ? 'linux' : hostOsName.contains('windows') ? 'win' : hostOsName) +
+        '-' + ((hostArchName == 'amd64' || hostArchName == 'x86_64') ? 'x64' : hostArchName)
+def targetPlatformId = project.hasProperty('targetPlatform') ? project.property('targetPlatform').toString() : hostPlatform
+if (!supportedPlatforms.containsKey(targetPlatformId)) {
+    throw new GradleException("Unsupported target platform '" + targetPlatformId + "'" +
+            (project.hasProperty('targetPlatform') ? '' : " (build host: " + hostOsName + "/" + hostArchName + ")") +
+            ". Supported: " + supportedPlatforms.keySet().join(', ') +
+            ". Windows/macOS ARM and 32-bit systems are not supported.")
+}
+ext.targetPlatformId = targetPlatformId
+ext.jfxClassifier = supportedPlatforms[targetPlatformId]
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
@@ -22,9 +45,9 @@ dependencies {
 
     // JavaFX 21 LTS (explicit platform classifiers; project is non-modular).
     implementation 'org.openjfx:javafx-controls:21.0.7'
-    implementation 'org.openjfx:javafx-graphics:21.0.7:linux'
-    implementation 'org.openjfx:javafx-base:21.0.7:linux'
-    implementation 'org.openjfx:javafx-controls:21.0.7:linux'
+    implementation "org.openjfx:javafx-graphics:21.0.7:${jfxClassifier}"
+    implementation "org.openjfx:javafx-base:21.0.7:${jfxClassifier}"
+    implementation "org.openjfx:javafx-controls:21.0.7:${jfxClassifier}"
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.12.2'
@@ -49,7 +72,7 @@ tasks.named('test', Test) {
 // ONNX Runtime, metadata-extractor) stays on the classpath, which may read
 // all named modules. Headless tasks (test/verifyOcrSetup/recognizeImage)
 // keep the plain classpath and never load JavaFX.
-def isJavafxModuleJar = { File f -> f.name ==~ /javafx-(base|graphics|controls)-.*-linux\.jar/ }
+def isJavafxModuleJar = { File f -> f.name ==~ ("javafx-(base|graphics|controls)-.*-" + jfxClassifier + "\\.jar") }
 def isJavafxJar = { File f -> f.name ==~ /javafx-.*\.jar/ }
 
 tasks.named('run', JavaExec) {
@@ -87,7 +110,7 @@ tasks.named('startScripts') {
 
 String relocateJavafx(String script, String sep, String libPrefix, String cygpathAnchor, String classpathAnchor) {
     List<String> moduleJars = ['javafx-base', 'javafx-graphics', 'javafx-controls'].collect { mod ->
-        def m = script =~ /(\Q${libPrefix}\E${mod}-[^:'";\s]*-linux\.jar)/
+        def m = script =~ /(\Q${libPrefix}\E${mod}-[^:'";\s]*-${jfxClassifier}\.jar)/
         if (!m.find()) {
             throw new GradleException("startScripts surgery: expected JavaFX module jar for ${mod} not found")
         }
@@ -201,5 +224,19 @@ tasks.register('crossCheckDump', JavaExec) {
     }
     if (project.hasProperty('outDir')) {
         args '--out', project.property('outDir')
+    }
+}
+
+// Distribution: one explicit platform per staged tree. A non-host target stages into its own directory so a
+// cross-staged tree can never be mistaken for (or overwrite) the host's. The PLATFORM file lets the installers
+// reject an incompatible tree instead of installing it.
+tasks.named('installDist') {
+    def hostDefault = !project.hasProperty('targetPlatform') || project.property('targetPlatform').toString() == hostPlatform
+    if (!hostDefault) {
+        destinationDir = layout.buildDirectory.dir("install-${targetPlatformId}/notebook-ai").get().asFile
+    }
+    doLast {
+        new File(destinationDir, 'PLATFORM').text =
+                "platform=${targetPlatformId}\napp=notebook-ai\nversion=${project.version}\njavafx=21.0.7\nonnxruntime=1.22.0\njava-release=21\n"
     }
 }
